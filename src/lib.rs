@@ -1,290 +1,420 @@
+#![feature(io_error_more)]
+#![feature(return_position_impl_trait_in_trait)]
 #[macro_use]
 extern crate log;
+extern crate core;
 
 mod fallback;
+mod cell;
+mod cert;
+mod connection;
+mod circuit;
+mod stream;
+mod net_status;
+mod con;
+mod auth;
+mod http;
+pub mod hs;
+pub mod storage;
 
+use std::ops::Deref;
 use rand::prelude::*;
-use std::io::{Read, Write};
+use futures::StreamExt;
+use rsa::PublicKey;
+use auth::RsaIdentity;
 
 static PAYLOAD_LEN: usize = 509;
+static MAX_RELAY_DATA_LEN: usize = PAYLOAD_LEN - 11;
+static VERSIONS: [u16; 2] = [3, 4];
+static CIRCUIT_WINDOW_INITIAL: isize = 1000;
+static CIRCUIT_WINDOW_INCREMENT: isize = 100;
+static STREAM_WINDOW_INITIAL: isize = 500;
+static STREAM_WINDOW_INCREMENT: isize = 50;
+static DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+type Aes128Enc = ctr::Ctr128BE<aes::Aes128Enc>;
+type Aes128Dec = ctr::Ctr128BE<aes::Aes128Enc>;
+type Aes256= ctr::Ctr128BE<aes::Aes256>;
 
-pub struct RsaIdentity([u8; 20]);
+type Consensus = std::sync::Arc<tokio::sync::RwLock<Option<net_status::consensus::Consensus>>>;
 
-impl RsaIdentity {
-    fn new(id: &str) -> RsaIdentity {
-        let mut key = [0; 20];
-        hex::decode_to_slice(id, &mut key).unwrap();
-        RsaIdentity(key)
-    }
+pub struct Client<S: storage::Storage> {
+    storage: std::sync::Arc<S>,
+    current_consensus: Consensus,
+    ds_circuit: std::sync::Arc<tokio::sync::RwLock<Option<circuit::Circuit>>>
 }
 
-impl std::fmt::Display for RsaIdentity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "${}", hex::encode(&self.0.as_ref()))
-    }
-}
-
-impl std::fmt::Debug for RsaIdentity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RsaIdentity {{ {} }}", self)
-    }
-}
-
-struct Authority {
-    name: String,
-    id: RsaIdentity,
-}
-
-impl Authority {
-    fn new(name: &str, id: &str) -> Authority {
-        Authority {
-            name: name.to_string(),
-            id: RsaIdentity::new(id),
+impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
+    pub fn new(storage: S) -> Self {
+        Self {
+            storage: std::sync::Arc::new(storage),
+            current_consensus: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            ds_circuit: std::sync::Arc::new(tokio::sync::RwLock::new(None))
         }
     }
-}
 
-fn default_authorities() -> Vec<Authority> {
-    vec![
-        Authority::new("bastet", "27102BC123E7AF1D4741AE047E160C91ADC76B21"),
-        Authority::new("dannenberg", "0232AF901C31A04EE9848595AF9BB7620D4C5B2E"),
-        Authority::new("dizum", "E8A9C45EDE6D711294FADF8E7951F4DE6CA56B58"),
-        Authority::new("gabelmoo", "ED03BB616EB2F60BEC80151114BB25CEF515B226"),
-        Authority::new("longclaw", "23D15D965BC35114467363C165C4F724B64B4F66"),
-        Authority::new("maatuska", "49015F787433103580E3B66A1707A00E60F2D15B"),
-        Authority::new("moria1", "F533C81CEF0BC0267857C99B2F471ADF249FA232"),
-        Authority::new("tor26", "14C131DFC5C6F93646BE72FA1401C02A8DF2E8B4"),
-    ]
-}
-
-#[derive(Debug)]
-struct Cell {
-    circuit_id: u32,
-    command: Command
-}
-
-impl Cell {
-    fn write<W: Write>(&self, version: u16, out: &mut W) -> std::io::Result<()> {
-        let command_id = self.command.command_id();
-        let command_data = self.command.data();
-        let is_variable = Self::is_variable(command_id, version);
-
-        if version >= 4 {
-            out.write_all(&self.circuit_id.to_be_bytes())?;
-        } else {
-            out.write_all(&(self.circuit_id as u16).to_be_bytes())?;
-        }
-        out.write_all(&command_id.to_be_bytes())?;
-
-        if is_variable {
-            out.write_all(&(command_data.len() as u16).to_be_bytes())?;
-            out.write_all(&command_data)?;
-        } else {
-            let padding = vec![0; PAYLOAD_LEN - command_data.len()];
-            out.write_all(&command_data)?;
-            out.write_all(&padding)?;
-        }
-        Ok(())
+    pub async fn ready(&self) -> bool {
+        self.current_consensus.read().await.is_some()
     }
 
-    fn read<R: Read>(version: u16, read: &mut R) -> std::io::Result<Option<Cell>> {
-        let circuit_id = if version >= 4 {
-            let mut buf = [0; 4];
-            read.read_exact(& mut buf)?;
-            u32::from_be_bytes(buf)
-        } else {
-            let mut buf = [0; 2];
-            read.read_exact(& mut buf)?;
-            u16::from_be_bytes(buf) as u32
-        };
+    pub(crate) async fn consensus(&self) -> std::io::Result<net_status::consensus::Consensus> {
+        match self.current_consensus.read().await.deref() {
+            Some(c) => Ok(c.clone()),
+            None => Err(std::io::Error::new(std::io::ErrorKind::NetworkDown, "Not ready"))
+        }
+    }
 
-        let mut buf = [0; 1];
-        read.read_exact(& mut buf)?;
-        let command_id = u8::from_be_bytes(buf);
-        let is_variable = Self::is_variable(command_id, version);
-        let buf = if is_variable {
-            let mut buf = [0; 2];
-            read.read_exact(& mut buf)?;
-            let len = u16::from_be_bytes(buf) as usize;
-            let mut buf = vec![0; len];
-            read.read_exact(& mut buf)?;
-            buf
-        } else {
-            let mut buf = vec![0; PAYLOAD_LEN];
-            read.read_exact(& mut buf)?;
-            buf
-        };
+    pub(crate) async fn get_ds_circuit(&self) -> std::io::Result<circuit::Circuit> {
+        match self.ds_circuit.read().await.deref() {
+            Some(c) => {
+                if c.is_open().await {
+                    return Ok(c.clone());
+                }
+            },
+            None => {}
+        }
 
-        Ok(Some(Cell {
-            circuit_id,
-            command: match Command::from_data(command_id, buf)? {
-                Some(c) => c,
-                None => {
-                    warn!("Unknown command id: {}", command_id);
-                    return Ok(None)
+        let mut l = self.ds_circuit.write().await;
+        let consensus = self.consensus().await?;
+        let directory_server = net_status::select_directory_server(&consensus)
+            .ok_or(std::io::Error::new(
+                std::io::ErrorKind::NotFound, "No suitable directory server found"
+            ))?;
+        let tcp_stream = con::connect_to_router(directory_server).await?;
+        let mut con = connection::Connection::connect(tcp_stream, directory_server.identity).await?;
+        let circ = con.create_circuit_fast().await?;
+        *l = Some(circ.clone());
+        Ok(circ)
+    }
+
+    pub async fn run(&mut self) {
+        match self.storage.load_consensus().await {
+            Ok(mut r) => match net_status::consensus::Consensus::parse(&mut r).await {
+                Ok(c) => {
+                    let authority_keys = futures::stream::iter( auth::default_authorities())
+                        .map(|auth| {
+                            let storage = self.storage.clone();
+                            async move {
+                                let mut kr = match storage.load_dir_key_certificate(auth.id).await {
+                                    Ok(kr) => kr,
+                                    Err(e) => {
+                                        error!("Error loading dir key certificate: {}", e);
+                                        return (auth.id, None);
+                                    }
+                                };
+
+                                let directory_key = match net_status::dir_key_certificate::DirectoryKeyCertificate::parse(&mut kr).await {
+                                    Ok(dk) => dk,
+                                    Err(e) => {
+                                        warn!("Failed to parse directory key for authority {} ({}): {}", auth.name, auth.id, e);
+                                        return (auth.id, None);
+                                    }
+                                };
+
+                                let dk = if !directory_key.verify() {
+                                    warn!("Failed to verify stored directory key for {}", auth.name);
+                                    None
+                                } else if directory_key.fingerprint != auth.id {
+                                    warn!("Fingerprint mismatch for {}", auth.name);
+                                    None
+                                } else {
+                                    Some(directory_key)
+                                };
+                                (auth.id, dk)
+                            }
+                        }).buffer_unordered(10).collect::<std::collections::HashMap<RsaIdentity, _>>().await;
+
+                    if verify_consensus(&c, &authority_keys) {
+                        if c.valid_until < chrono::Utc::now() {
+                            warn!("Stored consensus is expired");
+                        } else {
+                            *self.current_consensus.write().await = Some(c);
+                        }
+                    } else {
+                        error!("Failed to verify stored consensus");
+                    }
+                }
+                Err(e) => {
+                    error!("Error parsing stored consensus: {}", e);
                 }
             }
-        }))
-    }
-
-    fn is_variable(command_id: u8, version: u16) -> bool {
-        if version == 2 {
-            command_id == 7
-        } else if version >= 3 {
-            command_id == 7 || command_id >= 128
-        } else {
-            false
+            Err(e) => {
+                error!("Error loading stored consensus: {}", e);
+            }
         }
-    }
-}
 
-#[derive(Debug)]
-enum Command {
-    Padding,
-    Versions(Vec<u16>)
-}
-
-impl Command {
-    fn command_id(&self) -> u8 {
-        match self {
-            Command::Padding => 0,
-            Command::Versions(_) => 7,
-        }
+        let storage = self.storage.clone();
+        let consensus = self.current_consensus.clone();
+        tokio::task::spawn(async move {
+            Self::consensus_loop(consensus, storage).await;
+        });
     }
 
-    fn data(&self) -> Vec<u8> {
-        match self {
-            Command::Padding => vec![],
-            Command::Versions(v) => v.iter().map(|v| v.to_be_bytes().to_vec()).flatten().collect(),
-        }
-    }
+    async fn consensus_loop(
+        consensus: Consensus,
+        storage: std::sync::Arc<S>
+    ) {
+        loop {
+            let consensus_is_current = consensus.read().await.as_ref().map_or(false, |consensus| {
+                consensus.fresh_until > chrono::Utc::now()
+            });
+            if !consensus_is_current {
 
-    fn from_data(command_id: u8, data: Vec<u8>) -> std::io::Result<Option<Command>> {
-        match command_id {
-            0 => Ok(Some(Command::Padding)),
-            7 => {
-                if data.len() % 2 != 0 {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid versions length"))
+                let (tcp_stream, identity) = match consensus.read().await.deref() {
+                    None => {
+                        // We have no stored consensus
+                        let fallback_dirs = fallback::FallbackDirs::new();
+                        let fallback = {
+                            let mut rng = rand::thread_rng();
+                            fallback_dirs.fallbacks.choose(&mut rng).unwrap()
+                        };
+                        info!("Using fallback {} for consensus", fallback.id);
+
+                        let tcp_stream = match tokio::time::timeout(
+                            DEFAULT_TIMEOUT,
+                            con::connect_to_fallback(&fallback)
+                        ).await {
+                            Ok(Ok(s)) => s,
+                            Ok(Err(e)) => {
+                                warn!("Failed to connect to fallback {}: {}", fallback.id, e);
+                                continue;
+                            }
+                            Err(_) => {
+                                warn!("Timed out connecting to fallback {}", fallback.id);
+                                continue;
+                            }
+                        };
+
+                        (tcp_stream, fallback.id)
+                    }
+                    Some(c) => {
+                        let delay_s = {
+                            let mut rng = thread_rng();
+                            let half_interval = ((c.fresh_until - c.valid_after) / 2).num_seconds();
+                            let unfresh_s = std::cmp::max((chrono::Utc::now() - c.fresh_until).num_seconds(), 0);
+                            let max_delay = std::cmp::max(half_interval - unfresh_s, 0);
+                            rng.gen_range(0, max_delay+1) as u64
+                        };
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_s)).await;
+
+                        let directory_server = match net_status::select_directory_server(&c) {
+                            Some(ds) => ds,
+                            None => {
+                                warn!("No directory server available");
+                                continue;
+                            }
+                        };
+                        info!("Using directory server {} for consensus", directory_server.identity);
+
+                        let tcp_stream = match tokio::time::timeout(
+                            DEFAULT_TIMEOUT,
+                            con::connect_to_router(&directory_server)
+                        ).await {
+                            Ok(Ok(s)) => s,
+                            Ok(Err(e)) => {
+                                warn!("Failed to connect to router {}: {}", directory_server.identity, e);
+                                continue;
+                            }
+                            Err(_) => {
+                                warn!("Timed out connecting to router {}", directory_server.identity);
+                                continue;
+                            }
+                        };
+
+                        (tcp_stream, directory_server.identity)
+                    }
+                };
+
+                let mut con = match tokio::time::timeout(
+                    DEFAULT_TIMEOUT,
+                    connection::Connection::connect(tcp_stream, identity)
+                ).await {
+                    Ok(Ok(c)) => c,
+                    Ok(Err(e)) => {
+                        warn!("Failed to connect to directory server {}: {}", identity, e);
+                        continue;
+                    }
+                    Err(_) => {
+                        warn!("Timed out connecting to directory server {}", identity);
+                        continue;
+                    }
+                };
+                let dir_circ = match tokio::time::timeout(
+                    DEFAULT_TIMEOUT, con.create_circuit_fast()
+                ).await {
+                    Ok(Ok(c)) => c,
+                    Ok(Err(e)) => {
+                        warn!("Failed to create directory circuit: {}", e);
+                        continue;
+                    }
+                    Err(_) => {
+                        warn!("Timed out creating directory circuit");
+                        continue;
+                    }
+                };
+                let dir_client = http::new_directory_client(dir_circ);
+
+                let authority_keys = futures::stream::iter( auth::default_authorities()).map(|auth| {
+                    let dir_client = dir_client.clone();
+                    let storage = storage.clone();
+                    async move {
+                        info!("Fetching key for authority {} ({})", auth.name, auth.id);
+                        let url = format!("http://dummy/tor/keys/fp/{}.z", auth.id.to_hex()).parse::<hyper::Uri>().unwrap();
+                        let res = http::HyperResponse::new( match tokio::time::timeout(
+                            DEFAULT_TIMEOUT, dir_client.get(url)
+                        ).await {
+                            Ok(Ok(res)) => res,
+                            Ok(Err(e)) => {
+                                warn!("Failed to fetch key for authority {} ({}): {}", auth.name, auth.id, e);
+                                return (auth.id, None);
+                            }
+                            Err(_) => {
+                                warn!("Timed out fetching key for authority {} ({})", auth.name, auth.id);
+                                return (auth.id, None);
+                            }
+                        });
+                        if !res.status().is_success() {
+                            warn!("Got non-success response fetching key for authority: {}", res.status());
+                            return (auth.id, None);
+                        }
+                        let mut body = match res.read() {
+                            Ok(body) => storage::SavingReader::new(body),
+                            Err(e) => {
+                                warn!("Failed to read response body: {}", e);
+                                return (auth.id, None);
+                            }
+                        };
+
+                        let directory_key = match tokio::time::timeout(
+                            DEFAULT_TIMEOUT,
+                            net_status::dir_key_certificate::DirectoryKeyCertificate::parse(&mut body)
+                        ).await {
+                            Ok(Ok(dk)) => dk,
+                            Ok(Err(e)) => {
+                                warn!("Failed to parse directory key for authority {} ({}): {}", auth.name, auth.id, e);
+                                return (auth.id, None);
+                            }
+                            Err(_) => {
+                                warn!("Timed out fetching key for authority {} ({})", auth.name, auth.id);
+                                return (auth.id, None);
+                            }
+                        };
+
+                        let dk = if !directory_key.verify() {
+                            warn!("Failed to verify directory key for {}", auth.name);
+                            None
+                        } else if directory_key.fingerprint != auth.id {
+                            warn!("Fingerprint mismatch for {}", auth.name);
+                            None
+                        } else {
+                            let b = body.buf();
+                            if let Err(e) = storage.save_dir_key_certificate(auth.id, b).await {
+                                warn!("Failed to save directory key certificate for {}: {}", auth.name, e);
+                            }
+                            Some(directory_key)
+                        };
+                        (auth.id, dk)
+                    }
+                }).buffer_unordered(10).collect::<std::collections::HashMap<RsaIdentity, _>>().await;
+
+                let res = http::HyperResponse::new(
+                    match tokio::time::timeout(
+                        DEFAULT_TIMEOUT,
+                        dir_client.get(hyper::Uri::from_static("http://dummy/tor/status-vote/current/consensus.z"))
+                    ).await {
+                        Ok(Ok(res)) => res,
+                        Ok(Err(e)) => {
+                            warn!("Failed to fetch consensus: {}", e);
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!("Timed out fetching consensus");
+                            continue;
+                        }
+                    }
+                );
+                if !res.status().is_success() {
+                    error!("Got non-success response fetching consensus: {}", res.status());
+                    continue;
                 }
-                let mut versions = Vec::new();
-                for i in 0..data.len()/2 {
-                    let mut buf = [0; 2];
-                    buf.copy_from_slice(&data[i*2..i*2+2]);
-                    versions.push(u16::from_be_bytes(buf));
+                let mut body = match res.read() {
+                    Ok(body) => storage::SavingReader::new(body),
+                    Err(e) => {
+                        warn!("Failed to read response body: {}", e);
+                        continue;
+                    }
+                };
+
+                let new_consensus = match tokio::time::timeout(
+                    DEFAULT_TIMEOUT * 3, net_status::consensus::Consensus::parse(&mut body)
+                ).await {
+                    Ok(Ok(dk)) => dk,
+                    Ok(Err(e)) => {
+                        warn!("Failed to parse consensus: {}", e);
+                        continue;
+                    }
+                    Err(_) => {
+                        warn!("Timed out fetching consensus");
+                        continue;
+                    }
+                };
+
+                if verify_consensus(&new_consensus, &authority_keys) {
+                    let b = body.buf();
+                    if let Err(e) = storage.save_consensus(b).await {
+                        warn!("Failed to save consensus: {}", e);
+                    }
+                    // if let Err(e) = storage.clean_server_descriptors().await {
+                    //     warn!("Failed to clean server descriptors: {}", e);
+                    // }
+                    consensus.write().await.replace(new_consensus);
+                } else {
+                    continue;
                 }
-                Ok(Some(Command::Versions(versions)))
+            } else {
+                trace!("Consensus is current, not doing anything");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    }
+}
+
+fn verify_consensus(
+    consensus: &net_status::consensus::Consensus,
+    authorities: &std::collections::HashMap<RsaIdentity, Option<net_status::dir_key_certificate::DirectoryKeyCertificate>>
+) -> bool {
+    let mut num_valid_signatures = 0;
+    for sig in &consensus.signatures {
+        let auth = match authorities.get(&sig.identity) {
+            Some(Some(auth)) => auth,
+            Some(None) => continue,
+            None => {
+                warn!("Unknown authority {}", sig.identity);
+                continue;
+            }
+        };
+        let signing_key_digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &auth.signing_key);
+        if signing_key_digest.as_ref() != sig.signing_key_digest {
+            warn!("Signing key digest mismatch for {}", sig.identity);
+            continue;
+        }
+
+        match auth.signing_key_rsa().unwrap().verify(
+            rsa::PaddingScheme::new_pkcs1v15_sign_raw(), consensus.digest.as_ref(), &sig.signature
+        ) {
+            Ok(_) => {
+                num_valid_signatures += 1;
             },
-            _ => Ok(None)
-        }
-    }
-}
-
-fn connect_to_fallback(fallback: &fallback::FallbackDir) -> Result<std::net::TcpStream, std::io::Error> {
-    if let Some(v6) = fallback.v6 {
-        debug!("Connecting to fallback {} on v6", fallback.id);
-        match std::net::TcpStream::connect(v6) {
-            Ok(stream) => {
-                info!("TCP connection to fallback {} established", fallback.id);
-                return Ok(stream)
-            },
-            Err(e) => warn!("Failed to connect to fallback {} on v6: {}", fallback.id, e),
-        }
-    }
-    debug!("Connecting to fallback {} on v4", fallback.id);
-    match std::net::TcpStream::connect(fallback.v4) {
-        Ok(stream) => {
-            info!("TCP connection to fallback {} established", fallback.id);
-            return Ok(stream)
-        },
-        Err(e) => {
-            warn!("Failed to connect to fallback {} on v4: {}", fallback.id, e);
-            Err(e)
-        },
-    }
-}
-
-fn is_v3_handshake(ssl: &openssl::ssl::SslRef) -> bool {
-    let cert = match ssl.peer_certificate() {
-        Some(cert) => cert,
-        None => return false,
-    };
-
-    // The certificate is self-signed
-    let pubkey = match cert.public_key() {
-        Ok(pubkey) => pubkey,
-        Err(_) => return false,
-    };
-    match cert.verify(&pubkey) {
-        Ok(true) => return true,
-        _ => {}
-    }
-
-    // Some component other than "commonName" is set in the subject or issuer DN of the certificate.
-    if cert.issuer_name().entries()
-        .any(|entry| entry.object().nid() != openssl::nid::Nid::COMMONNAME) ||
-        cert.subject_name().entries()
-        .any(|entry| entry.object().nid() != openssl::nid::Nid::COMMONNAME) {
-        return true;
-    }
-
-    // The commonName of the subject or issuer of the certificate ends with a suffix other than ".net".
-    if let Some(issuer_cn) = cert.issuer_name().entries_by_nid(openssl::nid::Nid::COMMONNAME).next() {
-        if !issuer_cn.data().as_slice().ends_with(b".net") {
-            return true;
-        }
-    }
-    if let Some(subject_cn) = cert.subject_name().entries_by_nid(openssl::nid::Nid::COMMONNAME).next() {
-        if !subject_cn.data().as_slice().ends_with(b".net") {
-            return true;
+            Err(_) => {
+                warn!("Failed to verify signature for {}", sig.identity);
+            }
         }
     }
 
-    // The certificate's public key modulus is longer than 1024 bits.
-    if pubkey.bits() > 1024 {
-        return true;
+    info!("Got network consensus with {} valid and trusted signatures (out of {})", num_valid_signatures, consensus.signatures.len());
+    if num_valid_signatures < (authorities.len() / 2) + 1 {
+        error!("Not enough valid signatures on network consensus");
+        false
+    } else {
+        true
     }
-
-    false
-}
-
-pub fn fetch_consensus() {
-    let mut rng = thread_rng();
-
-    info!("Fetching consensus");
-    let fallback_dirs = fallback::FallbackDirs::new();
-    let fallback = fallback_dirs.fallbacks.choose(&mut rng).unwrap();
-    info!("Using fallback {}", fallback.id);
-    let mut tcp_stream = connect_to_fallback(fallback).unwrap();
-
-    let mut ssl_context_builder = openssl::ssl::SslContext::builder(
-        openssl::ssl::SslMethod::tls()
-    ).unwrap();
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::NO_SSLV2);
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::NO_SSLV3);
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::NO_TICKET);
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::SINGLE_DH_USE);
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::SINGLE_ECDH_USE);
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
-    ssl_context_builder.set_options(openssl::ssl::SslOptions::NO_COMPRESSION);
-    ssl_context_builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
-    let ssl_context = ssl_context_builder.build();
-
-    let mut tls_stream = openssl::ssl::SslStream::new(
-        openssl::ssl::Ssl::new(&ssl_context).unwrap(), tcp_stream
-    ).unwrap();
-    tls_stream.connect().unwrap();
-    info!("TLS connection to fallback {} established", fallback.id);
-    if !is_v3_handshake(tls_stream.ssl()) {
-        panic!("Fallback {} did not present a v3 handshake", fallback.id);
-    }
-
-    let mut protocol_version: u16 = 3;
-    let version_cell = Cell {
-        circuit_id: 0,
-        command: Command::Versions(vec![3, 4, 5])
-    };
-    version_cell.write(protocol_version, &mut tls_stream).unwrap();
-
-    let cell = Cell::read(protocol_version, &mut tls_stream).unwrap();
-    println!("{:?}", cell);
 }

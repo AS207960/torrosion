@@ -9,7 +9,31 @@ edition = "2021"
 hex = "0.4"
 log = "0.4"
 pretty_env_logger = "0.4.0"
-rand = "0.8.5"
+rand = "0.7"
 regex = "1"
 semver = "1"
-openssl = { version = "0.10", features = ["vendored"] }
+lazy_static = "1"
+chrono = "0.4"
+byteorder = "1"
+ring = "0.16"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-rustls = "0.23"
+tokio-stream = { version = "0.1", features = ["io-util"] }
+x509-parser = "0.14"
+oid-registry = "0.6.1"
+rsa = "0.7"
+aes = "0.8"
+ctr = "0.9"
+hyper = { version = "0.14", features = ["client", "http1", "tcp"] }
+futures = "0.3"
+async-compression = { version = "0.3", features = ["tokio", "zlib", "zstd", "xz"] }
+async-native-tls = { version = "0.4", features = ["runtime-tokio"], default-features = false }
+base64 = "0.21"
+base32 = "0.4.0"
+sha3 = "0.10.6"
+curve25519-dalek = "4.0.0-rc.1"
+ed25519-dalek = "1"
+x25519-dalek = "1"
+hkdf = "0.12.3"
+sha2 = "0.10.6"
