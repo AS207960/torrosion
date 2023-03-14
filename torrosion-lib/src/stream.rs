@@ -9,6 +9,7 @@ pub struct Stream {
     data_tx: tokio_util::sync::PollSender<Vec<u8>>,
     read_buf: Vec<u8>,
     end_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    close_reason: std::sync::Arc<std::sync::atomic::AtomicU8>
 }
 
 #[derive(Debug)]
@@ -28,13 +29,14 @@ impl Stream {
         let (command_in_tx, command_in_rx) = tokio::sync::mpsc::channel(10);
         let end_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let circuit_end = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let close_reason = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
 
         Self::run(
             identity, stream_id, circuit_id,
             circuit_end.clone(), command_rx, command_in_tx,
             command_tx.clone(),
             data_in_tx, data_out_rx,
-            end_sent.clone()
+            end_sent.clone(), close_reason.clone(),
         );
 
         Stream {
@@ -46,6 +48,7 @@ impl Stream {
             data_tx: tokio_util::sync::PollSender::new(data_out_tx),
             read_buf: Vec::new(),
             end_sent,
+            close_reason
         }
     }
 
@@ -59,6 +62,7 @@ impl Stream {
         data_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
         mut data_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
         end_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        close_reason: std::sync::Arc<std::sync::atomic::AtomicU8>,
     ) {
         tokio::task::spawn(async move {
             let mut package_window = crate::STREAM_WINDOW_INITIAL;
@@ -101,6 +105,7 @@ impl Stream {
                                 }
                                 cell::RelayCommand::End(e) => {
                                     debug!("{}: circuit {}, stream {} closed ({:?})", identity, circuit_id, stream_id, e.reason);
+                                    close_reason.store(e.reason as u8, std::sync::atomic::Ordering::Relaxed);
                                     return;
                                 }
                                 _ => match command_in_tx.send(command).await {
@@ -176,6 +181,60 @@ impl Stream {
             )),
         }
     }
+
+    fn close_reason_to_err(&self) -> std::io::Error {
+        let close_reason = self.close_reason.load(std::sync::atomic::Ordering::Relaxed);
+        if close_reason == 0 || close_reason > 14 {
+            return std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset, "stream closed",
+            );
+        }
+        let close_reason = unsafe { std::mem::transmute::<u8, cell::EndReason>(close_reason) };
+        match close_reason {
+            cell::EndReason::Misc => std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset, "stream closed",
+            ),
+            cell::EndReason::ResolveFailed => std::io::Error::new(
+                std::io::ErrorKind::HostUnreachable, "resolve failed",
+            ),
+            cell::EndReason::ConnectRefused => std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused, "connection refused",
+            ),
+            cell::EndReason::ExitPolicy => std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied, "exit policy",
+            ),
+            cell::EndReason::Destroy => std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset, "stream closed",
+            ),
+            cell::EndReason::Timeout => std::io::Error::new(
+                std::io::ErrorKind::TimedOut, "timeout",
+            ),
+            cell::EndReason::NoRoute => std::io::Error::new(
+                std::io::ErrorKind::NetworkUnreachable, "no route",
+            ),
+            cell::EndReason::Hibernating => std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset, "hibernating",
+            ),
+            cell::EndReason::Internal => std::io::Error::new(
+                std::io::ErrorKind::Other, "internal error",
+            ),
+            cell::EndReason::ResourceLimit => std::io::Error::new(
+                std::io::ErrorKind::ResourceBusy, "resource limit",
+            ),
+            cell::EndReason::ConnReset => std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset, "connection reset",
+            ),
+            cell::EndReason::TorProtocol => std::io::Error::new(
+                std::io::ErrorKind::InvalidData, "tor protocol violation",
+            ),
+            cell::EndReason::NotDirectory => std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused, "not a directory",
+            ),
+            _ => std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset, "stream closed",
+            )
+        }
+    }
 }
 
 impl hyper::client::connect::Connection for Stream {
@@ -221,7 +280,7 @@ impl tokio::io::AsyncWrite for Stream {
             std::task::Poll::Pending => return std::task::Poll::Pending,
             std::task::Poll::Ready(Ok(())) => {},
             std::task::Poll::Ready(Err(_)) => return std::task::Poll::Ready(Err(
-                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "stream closed")
+                self.close_reason_to_err()
             )),
         }
         let data = buf.iter().take(crate::MAX_RELAY_DATA_LEN).map(|d| *d).collect::<Vec<u8>>();
@@ -229,7 +288,7 @@ impl tokio::io::AsyncWrite for Stream {
         match self.data_tx.send_item(data) {
             Ok(()) => {},
             Err(_) => return std::task::Poll::Ready(Err(
-                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "stream closed")
+                self.close_reason_to_err()
             ))
         }
         std::task::Poll::Ready(Ok(len))
@@ -250,7 +309,7 @@ impl tokio::io::AsyncWrite for Stream {
             std::task::Poll::Pending => return std::task::Poll::Pending,
             std::task::Poll::Ready(Ok(())) => {},
             std::task::Poll::Ready(Err(_)) => return std::task::Poll::Ready(Err(
-                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "stream closed")
+                self.close_reason_to_err()
             )),
         }
         self.end_sent.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -265,7 +324,7 @@ impl tokio::io::AsyncWrite for Stream {
         match self.command_tx.send_item(cmd) {
             Ok(()) => {},
             Err(_) => return std::task::Poll::Ready(Err(
-                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "stream closed")
+                self.close_reason_to_err()
             ))
         }
         std::task::Poll::Ready(Ok(()))

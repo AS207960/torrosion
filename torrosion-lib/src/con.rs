@@ -3,7 +3,7 @@ pub(crate) async fn connect_to_fallback(fallback: &crate::fallback::FallbackDir)
         debug!("Connecting to fallback {} on v6", fallback.id);
         match tokio::net::TcpStream::connect(v6).await {
             Ok(stream) => {
-                info!("TCP connection to fallback {} established", fallback.id);
+                debug!("TCP connection to fallback {} established", fallback.id);
                 return Ok(stream)
             },
             Err(e) => warn!("Failed to connect to fallback {} on v6: {}", fallback.id, e),

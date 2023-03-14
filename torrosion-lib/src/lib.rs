@@ -29,6 +29,7 @@ static CIRCUIT_WINDOW_INITIAL: isize = 1000;
 static CIRCUIT_WINDOW_INCREMENT: isize = 100;
 static STREAM_WINDOW_INITIAL: isize = 500;
 static STREAM_WINDOW_INCREMENT: isize = 50;
+static DEFAULT_RETRIES: usize = 3;
 static DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 type Aes128 = ctr::Ctr128BE<aes::Aes128>;
 type Aes256 = ctr::Ctr128BE<aes::Aes256>;
@@ -434,7 +435,8 @@ fn verify_consensus(
         }
     }
 
-    info!("Got network consensus with {} valid and trusted signatures (out of {})", num_valid_signatures, consensus.signatures.len());
+    info!("Got network consensus with {} valid and trusted signatures (out of {} received signatures, \
+     {} known authorities)", num_valid_signatures, consensus.signatures.len(), authorities.len());
     if num_valid_signatures < (authorities.len() / 2) + 1 {
         error!("Not enough valid signatures on network consensus");
         false

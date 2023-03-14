@@ -4,6 +4,7 @@ use sha3::Digest;
 use futures::StreamExt;
 use rand::prelude::*;
 use chrono::prelude::*;
+use digest::XofReader;
 
 mod descriptor;
 mod first_layer;
@@ -162,14 +163,71 @@ impl HSAddress {
         let mut candidates = Self::candidates(&consensus, hs_relays, &blinded_key);
         candidates.shuffle(&mut thread_rng());
 
-        let first_router = crate::net_status::select_node(&consensus).unwrap();
-        let first_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-            &first_router, &client
-        ).await?;
-        let tcp_stream = crate::con::connect_to_router(&first_router).await?;
-        let mut con = crate::connection::Connection::connect(
-            tcp_stream, first_router_descriptor.identity
-        ).await?;
+        let mut r = 0;
+        let (mut con, first_router_descriptor) = loop {
+            if r >= crate::DEFAULT_RETRIES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::HostUnreachable, "Failed to make rendezvous point",
+                ))
+            }
+
+            let first_router = crate::net_status::select_node(&consensus).unwrap();
+            let first_router_descriptor = match tokio::time::timeout(
+                crate::DEFAULT_TIMEOUT,
+                crate::net_status::descriptor::get_server_descriptor(
+                    &first_router, &client
+                )
+            ).await {
+                Ok(Ok(d)) => d,
+                Ok(Err(e)) => {
+                    warn!("Failed to get server descriptor: {}", e);
+                    r += 1;
+                    continue;
+                }
+                Err(_) => {
+                    warn!("Timed out getting server descriptor");
+                    r += 1;
+                    continue;
+                }
+            };
+
+            let tcp_stream = match tokio::time::timeout(
+                crate::DEFAULT_TIMEOUT,
+                crate::con::connect_to_router(&first_router)
+            ).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    warn!("Failed to connect to router: {}", e);
+                    r += 1;
+                    continue;
+                }
+                Err(_) => {
+                    warn!("Timed out connecting to router");
+                    r += 1;
+                    continue;
+                }
+            };
+
+             match tokio::time::timeout(
+                crate::DEFAULT_TIMEOUT,
+                crate::connection::Connection::connect(
+                    tcp_stream, first_router_descriptor.identity
+                )
+            ).await {
+                Ok(Ok(c)) => break (c, first_router_descriptor),
+                Ok(Err(e)) => {
+                    warn!("Failed to connect to router: {}", e);
+                    r += 1;
+                    continue;
+                }
+                Err(_) => {
+                    warn!("Timed out connecting to router");
+                    r += 1;
+                    continue;
+                }
+            }
+        };
+
 
         for candidate in &candidates {
             let dir_circ = match tokio::time::timeout(
@@ -268,9 +326,8 @@ impl HSAddress {
         secret_data: &[u8], hs_subcred: &[u8], revision_counter: u64, string_constant: &[u8],
         data: &[u8]
     ) -> std::io::Result<Vec<u8>> {
-        use sha3::digest::{Update, ExtendableOutput, XofReader};
-        use aes::cipher::KeyIvInit;
-        use aes::cipher::StreamCipher;
+        use sha3::digest::{Update, ExtendableOutput};
+        use aes::cipher::{KeyIvInit, StreamCipher};
 
         if data.len() < 96 {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid encrypted data"));
@@ -313,7 +370,7 @@ impl HSAddress {
     }
 
     pub async fn fetch_ds<'a, S: crate::storage::Storage + Send + Sync + 'static>(
-        &self, client: &crate::Client<S>, hs_relays: &'a HSRelays
+        &self, client: &crate::Client<S>, hs_relays: &'a HSRelays, private_key: Option<[u8; 32]>
     ) -> std::io::Result<(second_layer::Descriptor, Vec<u8>)> {
         let consensus = client.consensus().await?;
         let (blinded_key, hs_subcred) = self.blinded_key(&consensus);
@@ -330,8 +387,40 @@ impl HSAddress {
         )?;
         let first_layer = first_layer::Descriptor::parse(&mut inner_descriptor_bytes.as_slice()).await?;
 
+        let descriptor_cookie = if let Some(private_key) = private_key {
+            use sha3::digest::{Update, ExtendableOutput};
+            use aes::cipher::{KeyIvInit, StreamCipher};
+
+            let my_pk = x25519_dalek::StaticSecret::from(private_key);
+            let their_pk = x25519_dalek::PublicKey::from(first_layer.ephemeral_key);
+            let secret_seed = my_pk.diffie_hellman(&their_pk);
+
+            let mut kdf = sha3::Shake256::default();
+            kdf.update(&hs_subcred);
+            kdf.update(secret_seed.as_bytes());
+            let mut reader = kdf.finalize_xof();
+
+            let mut client_id = [0; 8];
+            let mut cookie_key = [0; 32];
+            reader.read(&mut client_id);
+            reader.read(&mut cookie_key);
+
+            if let Some(client) = first_layer.auth_clients.iter().find(|c| c.client_id == client_id) {
+                let mut cookie = client.encrypted_cookie.clone();
+                let mut c = crate::Aes256::new(&cookie_key.into(), &client.iv.into());
+                c.apply_keystream(&mut cookie);
+                cookie
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        let mut second_layer_secret_data = blinded_key.to_vec();
+        second_layer_secret_data.extend_from_slice(&descriptor_cookie);
         let second_layer_bytes = Self::decrypt(
-            &blinded_key, &hs_subcred, descriptor.revision_counter, b"hsdir-encrypted-data",
+            &second_layer_secret_data, &hs_subcred, descriptor.revision_counter, b"hsdir-encrypted-data",
             &first_layer.encrypted,
         )?;
         let second_layer = second_layer::Descriptor::parse(&mut second_layer_bytes.as_slice()).await?;

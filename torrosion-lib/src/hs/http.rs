@@ -2,12 +2,14 @@ use futures::FutureExt;
 
 pub struct HyperHSConnector<S: crate::storage::Storage + Send + Sync + 'static> {
     client: crate::Client<S>,
+    priv_key: Option<[u8; 32]>
 }
 
 impl<S: crate::storage::Storage + Send + Sync + 'static> Clone for HyperHSConnector<S> {
     fn clone(&self) -> Self {
         HyperHSConnector {
             client: self.client.clone(),
+            priv_key: self.priv_key.clone(),
         }
     }
 }
@@ -26,6 +28,7 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> hyper::service::Service
 
     fn call(&mut self, req: hyper::Uri) -> Self::Future {
         let client = self.client.clone();
+        let priv_key = self.priv_key;
         async move {
             let hs_address = super::HSAddress::from_uri(&req)?;
 
@@ -45,7 +48,7 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> hyper::service::Service
             let port = authority.port_u16().unwrap_or(default_port);
 
             let dirs = client.get_hs_relays().await?;
-            let (ds, subcred) = hs_address.fetch_ds(&client, &dirs).await.unwrap();
+            let (ds, subcred) = hs_address.fetch_ds(&client, &dirs, priv_key).await.unwrap();
             let hs_circ = super::con::connect(&client, &ds, &subcred).await.unwrap();
 
             let con_to = format!("{}:{}", authority.host(), port);
@@ -54,12 +57,13 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> hyper::service::Service
     }
 }
 
-pub fn new_hs_client<S: crate::storage::Storage + Send + Sync + 'static>(
-    client: crate::Client<S>
+pub fn new_hs_client<S: crate::storage::Storage + Send + Sync + 'static, P: Into<Option<[u8; 32]>>>(
+    client: crate::Client<S>, priv_key: P
 ) -> hyper::client::Client<HyperHSConnector<S>, hyper::Body> {
     hyper::client::Client::builder()
         .set_host(true)
         .build::<_, hyper::Body>(HyperHSConnector {
             client,
+            priv_key: priv_key.into(),
         })
 }

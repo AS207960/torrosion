@@ -7,8 +7,8 @@
 async fn main() {
     pretty_env_logger::init();
 
-    let storage = libtor::storage::FileStorage::new("./storage").await.unwrap();
-    let mut client = libtor::Client::new(storage);
+    let storage = torrosion::storage::FileStorage::new("./storage").await.unwrap();
+    let mut client = torrosion::Client::new(storage);
 
     client.run().await;
 
@@ -17,7 +17,7 @@ async fn main() {
     }
     
     let hs_uri = hyper::Uri::from_static("https://www.bbcweb3hytmzhn5d532owbu6oqadra5z3ar726vq5kgwwn6aucdccrad.onion");
-    let hs_client = libtor::hs::http::new_hs_client(client).await.unwrap();
+    let hs_client = torrosion::hs::http::new_hs_client(client);
     
     hs_client.get(hs_uri).await.unwrap();
 }

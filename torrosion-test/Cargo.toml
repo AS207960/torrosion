@@ -1,0 +1,14 @@
+[package]
+name = "torrosion-test"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/AS207960/libtor"
+authors = ["Q Misell <q@as207960.net>"]
+homepage = "https://acmeforonions.org"
+license = "MIT"
+
+[dependencies]
+torrosion = { path = "../torrosion-lib" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "fs"] }
+hyper = { version = "0.14", features = ["client", "http1", "tcp"] }
+pretty_env_logger = "0.4"

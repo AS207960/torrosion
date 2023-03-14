@@ -299,7 +299,26 @@ pub async fn connect<S: crate::storage::Storage + Send + Sync + 'static>(
     let mut intro_points = descriptor.intro_points.clone();
     intro_points.shuffle(&mut thread_rng());
 
-    let (rend_circ, introduction_inner) = make_rendezvous_point(&client, &consensus).await?;
+    let mut r = 0;
+    let (rend_circ, introduction_inner) = loop {
+        match tokio::time::timeout(
+            crate::DEFAULT_TIMEOUT,make_rendezvous_point(&client, &consensus)
+        ).await {
+            Ok(Ok((c, i))) => break (c, i),
+            Ok(Err(e)) => {
+                warn!("Failed to make rendezvous point: {}", e);
+            }
+            Err(_) => {
+                warn!("Timed out making rendezvous point");
+            }
+        }
+        r += 1;
+        if r > crate::DEFAULT_RETRIES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::HostUnreachable, "Failed to make rendezvous point",
+            ))
+        }
+    };
 
     let kex_info = send_introduction(
         &client, &consensus, intro_points, &introduction_inner, subcred,
