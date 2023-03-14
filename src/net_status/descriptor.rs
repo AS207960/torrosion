@@ -1,9 +1,6 @@
 use std::ops::Deref;
-use tokio::io::AsyncReadExt;
 use base64::prelude::*;
-use futures::StreamExt;
 use ring::signature::VerificationAlgorithm;
-use rsa::pkcs8::DecodePublicKey;
 use rsa::PublicKey;
 use x509_parser::prelude::FromDer;
 
@@ -69,6 +66,7 @@ pub(crate) async fn get_server_descriptor<S: crate::storage::Storage + Send + Sy
     Ok(descriptor)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn get_server_descriptor_by_identity<S: crate::storage::Storage + Send + Sync + 'static>(
     router: crate::RsaIdentity, client: &crate::Client<S>,
 ) -> std::io::Result<Descriptor> {
@@ -88,6 +86,7 @@ pub(crate) async fn get_server_descriptor_by_identity<S: crate::storage::Storage
     Ok(descriptor)
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Descriptor {
     pub(crate) nickname: String,
@@ -129,6 +128,7 @@ pub(crate) enum ExitPolicy {
 }
 
 impl Descriptor {
+    #[allow(dead_code)]
     pub fn ed25519_key(&self) -> [u8; 32] {
         match self.ed25519_identity.key_type {
             crate::cert::KeyType::Ed25519(k) => k,
@@ -224,7 +224,7 @@ impl Descriptor {
         };
         let compressed_y = edpoint.compress();
 
-        if let Err(e) = self.ntor_onion_key_crosscert.0.verify_signature_ed25519(&compressed_y.as_bytes()) {
+        if let Err(_) = self.ntor_onion_key_crosscert.0.verify_signature_ed25519(&compressed_y.as_bytes()) {
             return false;
         }
 
@@ -328,6 +328,7 @@ impl Descriptor {
     }
 }
 
+#[allow(dead_code)]
 struct Router {
     nickname: String,
     address: std::net::Ipv4Addr,
@@ -390,6 +391,7 @@ impl Router {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum Line {
     Ed25519Identity(Vec<u8>),
@@ -595,6 +597,7 @@ impl Line {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Bandwidth {
     average: u64,
@@ -630,6 +633,7 @@ impl Bandwidth {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct ExitPattern {
     pub(crate) addr: Option<std::net::IpAddr>,
@@ -638,6 +642,7 @@ pub(crate) struct ExitPattern {
 }
 
 impl ExitPattern {
+    #[allow(dead_code)]
     pub fn matches(&self, addr: std::net::IpAddr, port: u16) -> bool {
         if let Some(o_addr) = self.addr {
             match (addr, o_addr) {
@@ -751,6 +756,7 @@ impl ExitPattern {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct ExtraInfoDigest {
     pub(crate) sha1: [u8; 20],
@@ -847,7 +853,7 @@ impl RsaSignature {
 
         let signature = match super::read_pem(reader).await {
             Ok(s) => s.contents,
-            Err(e) => return Err(std::io::Error::new(
+            Err(_) => return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput, "Invalid router-signature line",
             ))
         };

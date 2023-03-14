@@ -661,6 +661,7 @@ impl Authorize {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum ClientHandshake {
     Tap(TapClientHandshake),
@@ -703,6 +704,7 @@ pub struct RelayCellRaw {
     pub data: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RelayCommand {
     Begin(RelayBegin),
@@ -853,6 +855,7 @@ impl RelayCommand {
 
             RelayCommand::EstablishRendezvous(c) => c.data()?,
             RelayCommand::Introduce1(c) => c.data()?,
+            RelayCommand::Rendezvous2(c) => c.data()?,
             RelayCommand::RendezvousEstablished => vec![],
             RelayCommand::IntroduceAck(c) => c.data()?,
             _ => unimplemented!()
@@ -1301,12 +1304,14 @@ pub struct RelayIntroduce1 {
     pub mac: [u8; 32],
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RelayIntroduce1AuthKey {
     Ed25519([u8; 32]),
     Unrecognized(u8, Vec<u8>)
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RelayIntroduce1Extension {
     Unrecognized(u8, Vec<u8>)

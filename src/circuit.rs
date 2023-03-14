@@ -25,6 +25,7 @@ pub struct InnerCircuit {
 pub struct Circuit {
     identity: crate::RsaIdentity,
     circuit_id: u32,
+    #[allow(dead_code)]
     stream_tx: tokio::sync::mpsc::Sender<StreamManagement>,
     relay_tx: tokio::sync::mpsc::Sender<RelayCommand>,
     pub(crate) inner: std::sync::Arc<tokio::sync::Mutex<InnerCircuit>>,
@@ -170,6 +171,7 @@ impl std::fmt::Debug for CircuitNode {
     }
 }
 
+#[allow(dead_code)]
 enum StreamManagement {
     Create(u16, tokio::sync::mpsc::Sender<crate::stream::StreamCommand>),
     Destroy(u16),

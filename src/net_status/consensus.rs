@@ -2,6 +2,7 @@ use chrono::prelude::*;
 use base64::prelude::*;
 use super::{get_exactly_once, get_at_most_once, get_all};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Consensus {
     pub(crate) valid_after: DateTime<Utc>,
@@ -274,6 +275,7 @@ impl Timestamp {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct VotingDelay {
     pub vote_seconds: usize,
@@ -314,6 +316,7 @@ impl VersionList {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct Package {
     pub name: String,
@@ -421,6 +424,7 @@ impl Parameters {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct SharedRandomValue {
     pub num_reveals: usize,
@@ -448,6 +452,7 @@ impl SharedRandomValue {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct Authority {
     pub name: String,
@@ -578,6 +583,7 @@ impl Authority {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct Router {
     pub name: String,
@@ -782,6 +788,7 @@ impl RouterVersion {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RouterBandwidth {
     pub bandwidth: u64,
@@ -871,6 +878,7 @@ impl RouterPortPolicy {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct Signature {
     pub algorithm: SignatureAlgorithm,

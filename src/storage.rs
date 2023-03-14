@@ -36,15 +36,16 @@ impl<R: AsyncRead + Unpin + Send> AsyncRead for SavingReader<R> {
     }
 }
 
+#[async_trait::async_trait]
 pub trait Storage {
-    fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
-    fn load_consensus<'a>(&'a self) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a;
+    async fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> std::io::Result<()>;
+    async fn load_consensus<'a>(&'a self) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>>;
 
-    fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
-    fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a;
+    async fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> std::io::Result<()>;
+    async fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>>;
 
-    fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
-    fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a;
+    async fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> std::io::Result<()>;
+    async fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>>;
 }
 
 pub struct FileStorage {
@@ -73,65 +74,54 @@ impl FileStorage {
     }
 }
 
+#[async_trait::async_trait]
 impl Storage for FileStorage {
-    fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> impl futures::Future<Output = Result<(), std::io::Error>> + Send + 'a {
-        async {
-            let mut f = tokio::fs::File::create(self.root.join("consensus")).await?;
-            f.write_all(consensus).await?;
-            Ok(())
-        }
+    async fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> Result<(), std::io::Error> {
+        let mut f = tokio::fs::File::create(self.root.join("consensus")).await?;
+        f.write_all(consensus).await?;
+        Ok(())
     }
 
-    fn load_consensus<'a>(&'a self) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a {
-        async {
-            let f = tokio::fs::File::open(self.root.join("consensus")).await?;
-            Ok(f)
-        }
+    async fn load_consensus<'a>(&'a self) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>> {
+        let f = tokio::fs::File::open(self.root.join("consensus")).await?;
+        Ok(Box::new(f))
     }
 
-    fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a {
-        async move {
-            let mut p = self.root.join("dir-key-certificate");
-            p.push(identity.to_string());
-            let mut f = tokio::fs::File::create(p).await?;
-            f.write_all(cert).await?;
-            Ok(())
-        }
+    async fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> std::io::Result<()> {
+        let mut p = self.root.join("dir-key-certificate");
+        p.push(identity.to_string());
+        let mut f = tokio::fs::File::create(p).await?;
+        f.write_all(cert).await?;
+        Ok(())
     }
 
-   fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a {
-       async move {
-           let mut p = self.root.join("dir-key-certificate");
-           p.push(identity.to_string());
-           let f = tokio::fs::File::open(p).await?;
-           Ok(f)
-       }
+   async fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>> {
+       let mut p = self.root.join("dir-key-certificate");
+       p.push(identity.to_string());
+       let f = tokio::fs::File::open(p).await?;
+       Ok(Box::new(f))
     }
 
-    fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a {
+    async fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> std::io::Result<()> {
         let digest = hex::encode(digest);
-        async move {
-            let mut p = self.root.join("server-descriptor");
-            p.push(identity.to_string());
-            if tokio::fs::metadata(&p).await.is_ok() {
-                tokio::fs::remove_dir_all(&p).await?;
-            }
-            tokio::fs::create_dir(&p).await?;
-            p.push(digest);
-            let mut f = tokio::fs::File::create(p).await?;
-            f.write_all(descriptor).await?;
-            Ok(())
+        let mut p = self.root.join("server-descriptor");
+        p.push(identity.to_string());
+        if tokio::fs::metadata(&p).await.is_ok() {
+            tokio::fs::remove_dir_all(&p).await?;
         }
+        tokio::fs::create_dir(&p).await?;
+        p.push(digest);
+        let mut f = tokio::fs::File::create(p).await?;
+        f.write_all(descriptor).await?;
+        Ok(())
     }
 
-    fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a {
+    async fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>> {
         let digest = hex::encode(digest);
-        async move {
-            let mut p = self.root.join("server-descriptor");
-            p.push(identity.to_string());
-            p.push(digest);
-            let f = tokio::fs::File::open(p).await?;
-            Ok(f)
-        }
+        let mut p = self.root.join("server-descriptor");
+        p.push(identity.to_string());
+        p.push(digest);
+        let f = tokio::fs::File::open(p).await?;
+        Ok(Box::new(f))
     }
 }

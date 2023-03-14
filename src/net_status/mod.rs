@@ -3,6 +3,7 @@ pub mod dir_key_certificate;
 pub mod descriptor;
 
 use std::pin::Pin;
+use base64::prelude::*;
 use tokio::io::AsyncBufReadExt;
 use futures::StreamExt;
 use rand::prelude::SliceRandom;
@@ -196,7 +197,7 @@ impl LineReaderIter<'_> {
     }
 }
 
-pub async fn read_pem(mut r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem::Pem, x509_parser::error::PEMError> {
+pub async fn read_pem(r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem::Pem, x509_parser::error::PEMError> {
     let label = loop {
         let line = match r.next().await {
             Some(Ok(l)) => l,
@@ -224,7 +225,7 @@ pub async fn read_pem(mut r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem
         s.push_str(line.trim_end());
     }
 
-    let contents = base64::decode(&s).or(Err(x509_parser::error::PEMError::Base64DecodeError))?;
+    let contents = BASE64_STANDARD.decode(&s).or(Err(x509_parser::error::PEMError::Base64DecodeError))?;
     let pem = x509_parser::pem::Pem {
         label,
         contents,

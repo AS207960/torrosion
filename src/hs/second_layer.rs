@@ -75,6 +75,7 @@ impl Line {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct IntroductionPoint {
     pub(crate) link_specifiers: Vec<crate::cell::LinkSpecifier>,

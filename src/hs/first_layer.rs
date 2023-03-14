@@ -1,6 +1,7 @@
 use base64::prelude::*;
 use crate::net_status::{get_all, get_exactly_once};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Descriptor {
     pub(crate) ephemeral_key: [u8; 32],
@@ -68,7 +69,7 @@ impl Line {
                     let key = parts.next().ok_or(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid first layer descriptor",
                     ))?;
-                    let key = base64::decode(key).map_err(|_| std::io::Error::new(
+                    let key = BASE64_STANDARD.decode(key).map_err(|_| std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid first layer descriptor",
                     ))?;
                     Self::DescriptorAuthEphemeralKey(key)
@@ -78,7 +79,7 @@ impl Line {
                     Self::AuthClient(client)
                 }
                 "encrypted" => {
-                    let encrypted = crate::net_status::read_pem(reader).await.map_err(|e| std::io::Error::new(
+                    let encrypted = crate::net_status::read_pem(reader).await.map_err(|_| std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid first layer descriptor",
                     ))?;
                     Self::Encrypted(encrypted.contents)
@@ -89,6 +90,7 @@ impl Line {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct AuthClient {
     pub(crate) client_id: [u8; 8],

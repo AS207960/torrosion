@@ -1,9 +1,9 @@
 use base64::Engine;
 use base64::prelude::*;
-use chrono::prelude::*;
 use sha3::Digest;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use rand::prelude::*;
+use chrono::prelude::*;
 
 mod descriptor;
 mod first_layer;
@@ -163,12 +163,17 @@ impl HSAddress {
         candidates.shuffle(&mut thread_rng());
 
         let first_router = crate::net_status::select_node(&consensus).unwrap();
+        let first_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
+            &first_router, &client
+        ).await?;
         let tcp_stream = crate::con::connect_to_router(&first_router).await?;
-        let mut con = crate::connection::Connection::connect(tcp_stream, first_router.identity).await?;
+        let mut con = crate::connection::Connection::connect(
+            tcp_stream, first_router_descriptor.identity
+        ).await?;
 
         for candidate in &candidates {
             let dir_circ = match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT, con.create_circuit_fast()
+                crate::DEFAULT_TIMEOUT, con.create_circuit(first_router_descriptor.ntor_onion_key)
             ).await {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
@@ -449,8 +454,6 @@ fn shared_random_value(consensus: &crate::net_status::consensus::Consensus) -> [
 }
 
 mod test {
-    use chrono::prelude::*;
-
     #[test]
     fn test_tp() {
         let mock_consensus = crate::net_status::consensus::Consensus {

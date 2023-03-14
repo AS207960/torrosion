@@ -1,12 +1,13 @@
 use base64::prelude::*;
 use crate::net_status::{get_exactly_once};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Descriptor {
     pub(crate) lifetime: usize,
     pub(crate) signing_key_cert: crate::cert::Cert,
     pub(crate) revision_counter: u64,
-    pub(crate)superencrypted: Vec<u8>,
+    pub(crate) superencrypted: Vec<u8>,
     pub(crate) signature: Vec<u8>,
     pub(crate) signed_data: Vec<u8>,
 }

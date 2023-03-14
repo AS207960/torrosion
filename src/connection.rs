@@ -68,7 +68,6 @@ struct InnerConnection {
     identity: crate::RsaIdentity,
     protocol_version: u16,
     stream: async_native_tls::TlsStream<tokio::net::TcpStream>,
-    local_addr: std::net::SocketAddr,
     peer_addr: std::net::SocketAddr,
 }
 
@@ -639,7 +638,6 @@ pub(crate) struct NtorClientState {
 
 impl Connection {
     pub async fn connect(tcp_stream: tokio::net::TcpStream, identity: crate::RsaIdentity) -> std::io::Result<Connection> {
-        let local_addr = tcp_stream.local_addr()?;
         let peer_addr = tcp_stream.peer_addr()?;
 
         let tls_stream = match async_native_tls::TlsConnector::new()
@@ -662,7 +660,6 @@ impl Connection {
             identity,
             protocol_version: 3,
             stream: tls_stream,
-            local_addr,
             peer_addr,
         };
         let protocol_version = inner.negotiate_connection().await?;

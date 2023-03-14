@@ -1,11 +1,8 @@
-use base64::Engine;
-use base64::prelude::*;
-use chrono::prelude::*;
 use sha3::Digest;
-use futures::{SinkExt, StreamExt};
 use rand::prelude::*;
 use std::io::Write;
 use byteorder::{BigEndian, WriteBytesExt};
+use aes::cipher::StreamCipher;
 
 struct IntroductionInner {
     pub rendezvous_cookie: [u8; 20],
@@ -14,10 +11,12 @@ struct IntroductionInner {
     pub link_specifiers: Vec<crate::cell::LinkSpecifier>,
 }
 
+#[allow(dead_code)]
 enum IntroductionExtension {
     Unknown((u8, Vec<u8>)),
 }
 
+#[allow(dead_code)]
 enum IntroductionOnionKey {
     Ntor([u8; 32]),
     Unknown((u8, Vec<u8>)),
@@ -102,10 +101,15 @@ async fn make_rendezvous_point<S: crate::storage::Storage + Send + Sync + 'stati
     ).await?;
 
     let first_router = crate::net_status::select_node(&consensus).unwrap();
+    let first_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
+        &first_router, &client
+    ).await?;
     let tcp_stream = crate::con::connect_to_router(&first_router).await?;
-    let mut con = crate::connection::Connection::connect(tcp_stream, first_router.identity).await?;
+    let mut con = crate::connection::Connection::connect(
+        tcp_stream, first_router_descriptor.identity
+    ).await?;
 
-    let rend_circ = con.create_circuit_fast().await?;
+    let rend_circ = con.create_circuit(first_router_descriptor.ntor_onion_key).await?;
 
     let second_router = crate::net_status::select_node(&consensus).unwrap();
     let second_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
@@ -139,11 +143,13 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
 ) -> std::io::Result<IntroductionInfo> {
     use sha3::digest::{Update, ExtendableOutput, XofReader};
     use aes::cipher::KeyIvInit;
-    use aes::cipher::StreamCipher;
 
     let first_router = crate::net_status::select_node(&consensus).unwrap();
+    let first_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
+        &first_router, &client
+    ).await?;
     let tcp_stream = crate::con::connect_to_router(&first_router).await?;
-    let mut con = crate::connection::Connection::connect(tcp_stream, first_router.identity).await?;
+    let mut con = crate::connection::Connection::connect(tcp_stream, first_router_descriptor.identity).await?;
 
     let introduction_bytes = introduction_inner.to_bytes();
 
@@ -160,7 +166,7 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
         };
 
         let intro_circ = match tokio::time::timeout(
-            crate::DEFAULT_TIMEOUT, con.create_circuit_fast()
+            crate::DEFAULT_TIMEOUT, con.create_circuit(first_router_descriptor.ntor_onion_key)
         ).await {
             Ok(Ok(c)) => c,
             Ok(Err(e)) => {
@@ -288,8 +294,6 @@ pub async fn connect<S: crate::storage::Storage + Send + Sync + 'static>(
     client: &crate::Client<S>, descriptor: &super::second_layer::Descriptor, subcred: &[u8]
 ) -> std::io::Result<crate::circuit::Circuit> {
     use sha3::digest::{Update, ExtendableOutput, XofReader};
-    use aes::cipher::KeyIvInit;
-    use aes::cipher::StreamCipher;
 
     let consensus = client.consensus().await?;
     let mut intro_points = descriptor.intro_points.clone();
