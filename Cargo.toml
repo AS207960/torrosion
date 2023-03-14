@@ -2,7 +2,7 @@
 name = "torrosion"
 version = "0.1.0"
 edition = "2021"
-repository = "httgps://github.com/AS207960/libtor"
+repository = "https://github.com/AS207960/libtor"
 authors = ["Q Misell <q@as207960.net>"]
 description = "A Tor library for Rust"
 readme = "README.md"
