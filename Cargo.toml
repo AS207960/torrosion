@@ -2,6 +2,13 @@
 name = "libtor"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/AS207960/libtor"
+authors = ["Q Misell <q@as207960.net>"]
+description = "A Tor library for Rust"
+readme = "README.md"
+homepage = "https://acmeforonions.org"
+license = "MIT"
+exclude = ["/update_fallback.sh"]
 
 [dependencies]
 hex = "0.4"
