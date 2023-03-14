@@ -30,11 +30,133 @@ pub struct Circuit {
     pub(crate) inner: std::sync::Arc<tokio::sync::Mutex<InnerCircuit>>,
 }
 
+trait Digest: Send + Sync {
+    fn save(&mut self);
+    fn revert(&mut self);
+
+    fn update(&mut self, data: &[u8]);
+    fn output(&mut self) -> Vec<u8>;
+}
+
+struct Sha1 {
+    hasher: sha1::Sha1,
+    saved_hasher: Option<sha1::Sha1>
+}
+
+impl Sha1 {
+    fn new() -> Self {
+        use sha1::Digest;
+        Self {
+            hasher: sha1::Sha1::new(),
+            saved_hasher: None
+        }
+    }
+}
+
+impl Digest for Sha1 {
+    fn save(&mut self) {
+        self.saved_hasher = Some(self.hasher.clone());
+    }
+
+    fn revert(&mut self) {
+        if let Some(hasher) = self.saved_hasher.take() {
+            self.hasher = hasher;
+        }
+    }
+    
+    fn update(&mut self, data: &[u8]) {
+        use sha1::Digest;
+        self.hasher.update(data);
+    }
+
+    fn output(&mut self) -> Vec<u8> {
+        use sha1::Digest;
+        self.hasher.clone().finalize().to_vec()
+    }
+}
+
+struct Sha3_256 {
+    hasher: sha3::Sha3_256,
+    saved_hasher: Option<sha3::Sha3_256>
+}
+
+impl Sha3_256 {
+    fn new() -> Self {
+        use sha3::Digest;
+        Self {
+            hasher: sha3::Sha3_256::new(),
+            saved_hasher: None
+        }
+    }
+}
+
+impl Digest for Sha3_256 {
+    fn save(&mut self) {
+        self.saved_hasher = Some(self.hasher.clone());
+    }
+
+    fn revert(&mut self) {
+        if let Some(hasher) = self.saved_hasher.take() {
+            self.hasher = hasher;
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        use sha3::Digest;
+        self.hasher.update(data);
+    }
+
+    fn output(&mut self) -> Vec<u8> {
+        use sha3::Digest;
+        self.hasher.clone().finalize().to_vec()
+    }
+}
+
+trait Crypter: Send + Sync {
+    fn apply_keystream(&mut self, data: &mut [u8]);
+}
+
+struct Aes128 {
+    crypter: crate::Aes128,
+}
+
+impl Aes128 {
+    fn new(key: &[u8], iv: &[u8]) -> Self {
+        Self {
+            crypter: crate::Aes128::new(key.into(), iv.into())
+        }
+    }
+}
+
+impl Crypter for Aes128 {
+    fn apply_keystream(&mut self, data: &mut [u8]) {
+        self.crypter.apply_keystream(data);
+    }
+}
+
+struct Aes256 {
+    crypter: crate::Aes256,
+}
+
+impl Aes256 {
+    fn new(key: &[u8], iv: &[u8]) -> Self {
+        Self {
+            crypter: crate::Aes256::new(key.into(), iv.into())
+        }
+    }
+}
+
+impl Crypter for Aes256 {
+    fn apply_keystream(&mut self, data: &mut [u8]) {
+        self.crypter.apply_keystream(data);
+    }
+}
+
 struct CircuitNode {
-    forward_hasher: ring::digest::Context,
-    backward_hasher: ring::digest::Context,
-    forward_crypter: crate::Aes128Enc,
-    backward_crypter: crate::Aes128Dec,
+    forward_hasher: Box<dyn Digest>,
+    backward_hasher: Box<dyn Digest>,
+    forward_crypter: Box<dyn Crypter>,
+    backward_crypter: Box<dyn Crypter>,
     package_window: isize,
     deliver_window: isize,
 }
@@ -108,13 +230,11 @@ impl InnerCircuit {
                                             crate::CIRCUIT_WINDOW_INITIAL - crate::CIRCUIT_WINDOW_INCREMENT) {
                                             nodes_guard[origin].deliver_window += crate::CIRCUIT_WINDOW_INCREMENT;
 
-
-                                            let ctx = nodes_guard[origin].backward_hasher.clone();
-                                            let digest = ctx.finish();
+                                            let digest = nodes_guard[origin].backward_hasher.output();
 
                                             let command = cell::RelayCommand::SendMe(cell::RelaySendMe {
                                                 version: 1,
-                                                data: Some(digest.as_ref().to_vec()),
+                                                data: Some(digest),
                                             });
                                             trace!("Write relay cell (dest {}) {} {:?}", origin, 0, command);
                                             let payload = match Self::process_stream_command(0, crate::stream::StreamCommand {
@@ -298,19 +418,18 @@ impl InnerCircuit {
 
             let mut relay_cell = cell::RelayCellRaw::from_bytes(&cur)?;
             if relay_cell.recognized == 0 {
-                let old_hasher = n.backward_hasher.clone();
+                n.backward_hasher.save();
                 let old_digest = relay_cell.digest;
                 relay_cell.digest = [0; 4];
                 let hashed_bytes = relay_cell.to_bytes()?;
                 n.backward_hasher.update(&hashed_bytes);
-                let ctx = n.backward_hasher.clone();
-                let payload_digest = ctx.finish();
-                if old_digest == payload_digest.as_ref()[0..4] {
+                let payload_digest = n.backward_hasher.output();
+                if old_digest == payload_digest[0..4] {
                     trace!("Read relay cell (origin {}) {} {}", i, relay_cell.stream_id, relay_cell.command_id);
                     let relay_cell = cell::RelayCell::from_raw(relay_cell)?;
                     return Ok((i, relay_cell));
                 }
-                n.backward_hasher = old_hasher;
+                n.backward_hasher.revert();
             }
         }
         Err(std::io::Error::new(std::io::ErrorKind::Other, "unrecognized cell at last node"))
@@ -351,9 +470,8 @@ impl InnerCircuit {
         payload_bytes_no_digest.extend(&padding);
 
         dest_node.forward_hasher.update(&payload_bytes_no_digest);
-        let ctx = dest_node.forward_hasher.clone();
-        let payload_digest = ctx.finish();
-        cell.digest = payload_digest.as_ref()[0..4].try_into().unwrap();
+        let payload_digest = dest_node.forward_hasher.output();
+        cell.digest = payload_digest[0..4].try_into().unwrap();
 
         let mut payload_bytes = cell.to_bytes()?;
         payload_bytes.extend(&padding);
@@ -453,20 +571,40 @@ impl Circuit {
     }
 
     pub(crate) async fn insert_node(&self, df: [u8; 20], db: [u8; 20], kf: [u8; 16], kb: [u8; 16]) {
-        let mut hf = ring::digest::Context::new(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY);
-        let mut hb = ring::digest::Context::new(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY);
+        let mut hf = Sha1::new();
+        let mut hb = Sha1::new();
         hf.update(&df);
         hb.update(&db);
 
         let iv = [0u8; 16];
-        let fc = crate::Aes128Enc::new(&kf.into(), &iv.into());
-        let bc = crate::Aes128Dec::new(&kb.into(), &iv.into());
+        let fc = Aes128::new(&kf, &iv);
+        let bc = Aes128::new(&kb, &iv);
 
         self.inner.lock().await.nodes.lock().await.push(CircuitNode {
-            forward_hasher: hf,
-            backward_hasher: hb,
-            forward_crypter: fc,
-            backward_crypter: bc,
+            forward_hasher: Box::new(hf),
+            backward_hasher: Box::new(hb),
+            forward_crypter: Box::new(fc),
+            backward_crypter: Box::new(bc),
+            package_window: crate::CIRCUIT_WINDOW_INITIAL,
+            deliver_window: crate::CIRCUIT_WINDOW_INITIAL,
+        });
+    }
+
+    pub(crate) async fn insert_node_hs_v3(&self, df: [u8; 32], db: [u8; 32], kf: [u8; 32], kb: [u8; 32]) {
+        let mut hf = Sha3_256::new();
+        let mut hb = Sha3_256::new();
+        hf.update(&df);
+        hb.update(&db);
+
+        let iv = [0u8; 16];
+        let fc = Aes256::new(&kf, &iv);
+        let bc = Aes256::new(&kb, &iv);
+
+        self.inner.lock().await.nodes.lock().await.push(CircuitNode {
+            forward_hasher: Box::new(hf),
+            backward_hasher: Box::new(hb),
+            forward_crypter: Box::new(fc),
+            backward_crypter: Box::new(bc),
             package_window: crate::CIRCUIT_WINDOW_INITIAL,
             deliver_window: crate::CIRCUIT_WINDOW_INITIAL,
         });
@@ -490,24 +628,13 @@ impl Circuit {
         }
     }
 
-    pub(crate) async fn extend_circuit(&self, descriptor: &crate::net_status::descriptor::Descriptor) -> std::io::Result<()> {
+    pub(crate) async fn extend_circuit_raw(
+        &self, link_specifiers: Vec<crate::cell::LinkSpecifier>, identity: crate::RsaIdentity,
+        ntor_onion_key: [u8; 32],
+    ) -> std::io::Result<()> {
         let dest = self.inner.lock().await.circuit_len().await - 1;
-
-        info!("{}: extending circuit {} to {}", self.identity, self.get_circuit_id(), descriptor.identity);
-
-        let (data, state) = super::connection::Connection::ntor_client_1(descriptor.identity, descriptor.ntor_onion_key);
-
-        let mut link_specifiers = Vec::new();
-        link_specifiers.extend(descriptor.or_addresses.iter().filter_map(|addr| match addr {
-            std::net::SocketAddr::V4(addr) => Some(cell::LinkSpecifier::IPv4Address(*addr)),
-            _ => None,
-        }));
-        link_specifiers.push(cell::LinkSpecifier::LegacyIdentity(descriptor.identity));
-        link_specifiers.extend(descriptor.or_addresses.iter().filter_map(|addr| match addr {
-            std::net::SocketAddr::V6(addr) => Some(cell::LinkSpecifier::IPv6Address(*addr)),
-            _ => None,
-        }));
-        link_specifiers.push(cell::LinkSpecifier::Ed25519Identity(descriptor.ed25519_master_key));
+        debug!("{}: extending circuit {} to {}", self.identity, self.get_circuit_id(), identity);
+        let (data, state) = super::connection::Connection::ntor_client_1(identity, ntor_onion_key);
 
         match self.relay_tx.send(RelayCommand {
             stream_id: 0,
@@ -542,25 +669,114 @@ impl Circuit {
 
         let (df, db, kf, kb) = super::connection::Connection::ntor_client_2(&resp, state)?;
         self.insert_node(df, db, kf, kb).await;
-        info!("{}: circuit {} extended", self.identity, self.get_circuit_id());
+        debug!("{}: circuit {} extended", self.identity, self.get_circuit_id());
 
         Ok(())
+    }
+
+    pub(crate) async fn extend_circuit(&self, descriptor: &crate::net_status::descriptor::Descriptor) -> std::io::Result<()> {
+        self.extend_circuit_raw(descriptor.to_link_specifiers(), descriptor.identity, descriptor.ntor_onion_key).await
+    }
+
+    pub(crate) async fn establish_rendezvous(&self, cookie: [u8; 20]) -> std::io::Result<()> {
+        let dest = self.inner.lock().await.circuit_len().await - 1;
+
+        match self.relay_tx.send(RelayCommand {
+            stream_id: 0,
+            early: false,
+            command: crate::stream::StreamCommand {
+                node: dest,
+                command: cell::RelayCommand::EstablishRendezvous(cell::RelayEstablishRendezvous {
+                    cookie,
+                }),
+            }
+        }).await {
+            Ok(_) => {},
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "circuit closed")),
+        }
+
+        let reply_command = self.recv_relay_control_command().await?;
+        match reply_command.command {
+            cell::RelayCommand::RendezvousEstablished => {},
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset, "unexpected reply",
+                ));
+            }
+        };
+
+        debug!("{}: circuit {} now a rendezvous point", self.identity, self.get_circuit_id());
+
+        Ok(())
+    }
+
+    pub(crate) async fn recv_rendezvous(&self) -> std::io::Result<cell::RelayRendezvous2> {
+        let reply_command = self.recv_relay_control_command().await?;
+        let resp = match reply_command.command {
+            cell::RelayCommand::Rendezvous2(r) => r,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset, "unexpected reply",
+                ));
+            }
+        };
+
+        Ok(resp)
+    }
+
+    pub(crate) async fn send_introduction(&self, intro: cell::RelayIntroduce1) -> std::io::Result<cell::RelayIntroduceAck> {
+        let dest = self.inner.lock().await.circuit_len().await - 1;
+
+        match self.relay_tx.send(RelayCommand {
+            stream_id: 0,
+            early: false,
+            command: crate::stream::StreamCommand {
+                node: dest,
+                command: cell::RelayCommand::Introduce1(intro),
+            }
+        }).await {
+            Ok(_) => {},
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "circuit closed")),
+        }
+
+        let reply_command = self.recv_relay_control_command().await?;
+        let resp = match reply_command.command {
+            cell::RelayCommand::IntroduceAck(a) => a,
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset, "unexpected reply",
+                ));
+            }
+        };
+
+        debug!("{}: circuit {} sent introduction", self.identity, self.get_circuit_id());
+
+        Ok(resp)
     }
 
     pub async fn is_open(&self) -> bool {
         !self.inner.lock().await.relay_tx.is_closed()
     }
 
-    pub async fn relay_begin_dir(&self, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
+    pub async fn relay_begin(&self, to: &str, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
         let dest = dest.unwrap_or(self.inner.lock().await.circuit_len().await - 1);
         let mut stream = self.inner.lock().await.new_stream().await?;
         stream.circuit_end.store(dest, std::sync::atomic::Ordering::Relaxed);
+
         match stream.command_tx.get_ref().unwrap().send(crate::stream::StreamCommand {
             node: dest,
-            command: cell::RelayCommand::BeginDir,
+            command: cell::RelayCommand::Begin(cell::RelayBegin {
+                addr_port: to.to_string(),
+                ipv6_ok: true,
+                ipv4_not_ok: false,
+                ipv6_preferred: true
+            }),
         }).await {
             Ok(_) => {},
-            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "circuit closed")),
+            Err(_) => {
+                self.inner.lock().await.purge_stream(stream.get_stream_id());
+                return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "circuit closed"))
+            },
         }
         let reply_command = match stream.recv_command().await {
             Ok(command) => command,
@@ -584,7 +800,49 @@ impl Circuit {
             }
         };
 
-        info!("{}: circuit {}; created directory stream {} to node {}", self.identity, self.circuit_id, stream.get_stream_id(), dest);
+        debug!("{}: circuit {}; created stream {} to node {}", self.identity, self.circuit_id, stream.get_stream_id(), dest);
+
+        Ok(stream)
+    }
+
+    pub async fn relay_begin_dir(&self, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
+        let dest = dest.unwrap_or(self.inner.lock().await.circuit_len().await - 1);
+        let mut stream = self.inner.lock().await.new_stream().await?;
+        stream.circuit_end.store(dest, std::sync::atomic::Ordering::Relaxed);
+
+        match stream.command_tx.get_ref().unwrap().send(crate::stream::StreamCommand {
+            node: dest,
+            command: cell::RelayCommand::BeginDir,
+        }).await {
+            Ok(_) => {},
+            Err(_) => {
+                self.inner.lock().await.purge_stream(stream.get_stream_id());
+                return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "circuit closed"))
+            },
+        }
+        let reply_command = match stream.recv_command().await {
+            Ok(command) => command,
+            Err(e) => {
+                self.inner.lock().await.purge_stream(stream.get_stream_id());
+                return Err(e);
+            }
+        };
+
+        match reply_command.command {
+            cell::RelayCommand::End(e) => {
+                self.inner.lock().await.purge_stream(stream.get_stream_id());
+                return Err(e.reason.to_io_error());
+            },
+            cell::RelayCommand::Connected(_) => {},
+            _ => {
+                self.inner.lock().await.purge_stream(stream.get_stream_id());
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset, "unexpected reply",
+                ));
+            }
+        };
+
+        debug!("{}: circuit {}; created directory stream {} to node {}", self.identity, self.circuit_id, stream.get_stream_id(), dest);
 
         Ok(stream)
     }

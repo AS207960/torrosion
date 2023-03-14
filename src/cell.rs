@@ -705,7 +705,7 @@ pub struct RelayCellRaw {
 
 #[derive(Debug)]
 pub enum RelayCommand {
-    Begin,
+    Begin(RelayBegin),
     Data(Vec<u8>),
     End(RelayEnd),
     Connected(RelayConnected),
@@ -721,7 +721,16 @@ pub enum RelayCommand {
     Extend2(RelayExtend2),
     Extended2(RelayExtended2),
     Xon,
-    Xoff
+    Xoff,
+    EstablishInto,
+    EstablishRendezvous(RelayEstablishRendezvous),
+    Introduce1(RelayIntroduce1),
+    Introduce2,
+    Rendezvous1,
+    Rendezvous2(RelayRendezvous2),
+    IntroEstablished,
+    RendezvousEstablished,
+    IntroduceAck(RelayIntroduceAck),
 }
 
 impl RelayCell {
@@ -796,7 +805,7 @@ impl RelayCellRaw {
 impl RelayCommand {
     fn command_id(&self) -> u8 {
         match self {
-            RelayCommand::Begin => 1,
+            RelayCommand::Begin(_) => 1,
             RelayCommand::Data(_) => 2,
             RelayCommand::End(_) => 3,
             RelayCommand::Connected(_) => 4,
@@ -813,11 +822,22 @@ impl RelayCommand {
             RelayCommand::Extended2(_) => 15,
             RelayCommand::Xon => 43,
             RelayCommand::Xoff => 44,
+
+            RelayCommand::EstablishInto => 32,
+            RelayCommand::EstablishRendezvous(_) => 33,
+            RelayCommand::Introduce1(_) => 34,
+            RelayCommand::Introduce2 => 35,
+            RelayCommand::Rendezvous1 => 36,
+            RelayCommand::Rendezvous2(_) => 37,
+            RelayCommand::IntroEstablished => 38,
+            RelayCommand::RendezvousEstablished => 39,
+            RelayCommand::IntroduceAck(_) => 40,
         }
     }
 
     fn data(&self) -> std::io::Result<Vec<u8>> {
         Ok(match self {
+            RelayCommand::Begin(b) => b.data(),
             RelayCommand::Data(d) => {
                 let mut d = d.clone();
                 d.truncate(crate::MAX_RELAY_DATA_LEN);
@@ -830,12 +850,18 @@ impl RelayCommand {
             RelayCommand::BeginDir => vec![],
             RelayCommand::Extend2(c) => c.data()?,
             RelayCommand::Extended2(c) => c.data()?,
+
+            RelayCommand::EstablishRendezvous(c) => c.data()?,
+            RelayCommand::Introduce1(c) => c.data()?,
+            RelayCommand::RendezvousEstablished => vec![],
+            RelayCommand::IntroduceAck(c) => c.data()?,
             _ => unimplemented!()
         })
     }
 
     fn from_data(command_id: u8, data: Vec<u8>) -> std::io::Result<Option<RelayCommand>> {
         match command_id {
+            1 => Ok(Some(RelayCommand::Begin(RelayBegin::from_data(data)?))),
             2 => Ok(Some(RelayCommand::Data(data))),
             3 => Ok(Some(RelayCommand::End(RelayEnd::from_data(data)?))),
             4 => Ok(Some(RelayCommand::Connected(RelayConnected::from_data(data)?))),
@@ -844,8 +870,51 @@ impl RelayCommand {
             13 => Ok(Some(RelayCommand::BeginDir)),
             14 => Ok(Some(RelayCommand::Extend2(RelayExtend2::from_data(data)?))),
             15 => Ok(Some(RelayCommand::Extended2(RelayExtended2::from_data(data)?))),
+
+            33 => Ok(Some(RelayCommand::EstablishRendezvous(RelayEstablishRendezvous::from_data(data)?))),
+            34 => Ok(Some(RelayCommand::Introduce1(RelayIntroduce1::from_data(data)?))),
+            37 => Ok(Some(RelayCommand::Rendezvous2(RelayRendezvous2::from_data(data)?))),
+            39 => Ok(Some(RelayCommand::RendezvousEstablished)),
+            40 => Ok(Some(RelayCommand::IntroduceAck(RelayIntroduceAck::from_data(data)?))),
             _ => Ok(None)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RelayBegin {
+    pub addr_port: String,
+    pub ipv6_ok: bool,
+    pub ipv4_not_ok: bool,
+    pub ipv6_preferred: bool,
+}
+
+impl RelayBegin {
+    fn data(&self) -> Vec<u8> {
+        let mut cursor = std::io::Cursor::new(vec![]);
+
+        Write::write_all(&mut cursor, self.addr_port.as_bytes()).unwrap();
+        WriteBytesExt::write_u8(&mut cursor, 0).unwrap();
+
+        let mut flags = 0u32;
+
+        if self.ipv6_ok {
+            flags |= 1;
+        }
+        if self.ipv4_not_ok {
+            flags |= 2;
+        }
+        if self.ipv6_preferred {
+            flags |= 4;
+        }
+
+        WriteBytesExt::write_u32::<BigEndian>(&mut cursor, flags).unwrap();
+
+        cursor.into_inner()
+    }
+
+    fn from_data(_data: Vec<u8>) -> std::io::Result<Self> {
+        unimplemented!()
     }
 }
 
@@ -1093,12 +1162,13 @@ pub struct RelayExtend2 {
     pub client_handshake: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LinkSpecifier {
     IPv4Address(std::net::SocketAddrV4),
     IPv6Address(std::net::SocketAddrV6),
     LegacyIdentity(crate::RsaIdentity),
     Ed25519Identity([u8; 32]),
+    Unrecognized(u8, Vec<u8>)
 }
 
 impl RelayExtend2 {
@@ -1127,16 +1197,17 @@ impl RelayExtend2 {
 }
 
 impl LinkSpecifier {
-    fn type_id(&self) -> u8 {
+    pub(crate) fn type_id(&self) -> u8 {
         match self {
             LinkSpecifier::IPv4Address(_) => 0,
             LinkSpecifier::IPv6Address(_) => 1,
             LinkSpecifier::LegacyIdentity(_) => 2,
             LinkSpecifier::Ed25519Identity(_) => 3,
+            LinkSpecifier::Unrecognized(id, _) => *id,
         }
     }
 
-    fn data(&self) -> Vec<u8> {
+    pub(crate) fn data(&self) -> Vec<u8> {
         match self {
             LinkSpecifier::IPv4Address(addr) => {
                 let mut d = addr.ip().octets().to_vec();
@@ -1150,6 +1221,37 @@ impl LinkSpecifier {
             }
             LinkSpecifier::LegacyIdentity(id) => id.to_vec(),
             LinkSpecifier::Ed25519Identity(id) => id.to_vec(),
+            LinkSpecifier::Unrecognized(_, data) => data.clone(),
+        }
+    }
+
+    pub(crate) fn from_data(id: u8, data: Vec<u8>) -> std::io::Result<Self> {
+        let mut cursor = std::io::Cursor::new(data);
+
+        match id {
+            0 => {
+                let mut ip = [0; 4];
+                std::io::Read::read_exact(&mut cursor, &mut ip)?;
+                let port = ReadBytesExt::read_u16::<BigEndian>(&mut cursor)?;
+                Ok(LinkSpecifier::IPv4Address(std::net::SocketAddrV4::new(ip.into(), port)))
+            }
+            1 => {
+                let mut ip = [0; 16];
+                std::io::Read::read_exact(&mut cursor, &mut ip)?;
+                let port = ReadBytesExt::read_u16::<BigEndian>(&mut cursor)?;
+                Ok(LinkSpecifier::IPv6Address(std::net::SocketAddrV6::new(ip.into(), port, 0, 0)))
+            }
+            2 => {
+                let mut key = [0; 20];
+                std::io::Read::read_exact(&mut cursor, &mut key)?;
+                Ok(LinkSpecifier::LegacyIdentity(crate::RsaIdentity::from_bytes(&key)?))
+            }
+            3 => {
+                let mut key = [0; 32];
+                std::io::Read::read_exact(&mut cursor, &mut key)?;
+                Ok(LinkSpecifier::Ed25519Identity(key))
+            }
+            id => Ok(LinkSpecifier::Unrecognized(id, cursor.into_inner()))
         }
     }
 }
@@ -1171,6 +1273,156 @@ impl RelayExtended2 {
         std::io::Read::read_exact(&mut cursor,&mut server_data)?;
         Ok(RelayExtended2 {
             server_data
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RelayEstablishRendezvous {
+    pub cookie: [u8; 20],
+}
+
+impl RelayEstablishRendezvous {
+    fn data(&self) -> std::io::Result<Vec<u8>> {
+        Ok(self.cookie.to_vec())
+    }
+
+    fn from_data(_data: Vec<u8>) -> std::io::Result<Self> {
+       unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub struct RelayIntroduce1 {
+    pub auth_key: RelayIntroduce1AuthKey,
+    pub extensions: Vec<RelayIntroduce1Extension>,
+    pub client_pk: [u8; 32],
+    pub encrypted_data: Vec<u8>,
+    pub mac: [u8; 32],
+}
+
+#[derive(Debug)]
+pub enum RelayIntroduce1AuthKey {
+    Ed25519([u8; 32]),
+    Unrecognized(u8, Vec<u8>)
+}
+
+#[derive(Debug)]
+pub enum RelayIntroduce1Extension {
+    Unrecognized(u8, Vec<u8>)
+}
+
+impl RelayIntroduce1 {
+    pub(crate) fn data(&self) -> std::io::Result<Vec<u8>> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+
+        Write::write_all(&mut cursor,&[0u8; 20])?;
+
+        match &self.auth_key {
+            RelayIntroduce1AuthKey::Ed25519(key) => {
+                WriteBytesExt::write_u8(&mut cursor, 2)?;
+                WriteBytesExt::write_u16::<BigEndian>(&mut cursor, 32)?;
+                Write::write_all(&mut cursor, key)?;
+            }
+            RelayIntroduce1AuthKey::Unrecognized(id, data) => {
+                WriteBytesExt::write_u8(&mut cursor, *id)?;
+                WriteBytesExt::write_u16::<BigEndian>(&mut cursor, data.len() as u16)?;
+                Write::write_all(&mut cursor, data)?;
+            }
+        }
+
+        WriteBytesExt::write_u8(&mut cursor, self.extensions.len() as u8)?;
+        for ext in &self.extensions {
+            match ext {
+                RelayIntroduce1Extension::Unrecognized(id, data) => {
+                    WriteBytesExt::write_u8(&mut cursor, *id)?;
+                    WriteBytesExt::write_u8(&mut cursor, data.len() as u8)?;
+                    Write::write_all(&mut cursor, data)?;
+                }
+            }
+        }
+
+        Write::write_all(&mut cursor, &self.client_pk)?;
+        Write::write_all(&mut cursor, &self.encrypted_data)?;
+        Write::write_all(&mut cursor, &self.mac)?;
+
+        Ok(cursor.into_inner())
+    }
+
+    fn from_data(_data: Vec<u8>) -> std::io::Result<Self> {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub struct RelayRendezvous2 {
+    pub data: Vec<u8>
+}
+
+impl RelayRendezvous2 {
+    pub(crate) fn data(&self) -> std::io::Result<Vec<u8>> {
+        unimplemented!()
+    }
+
+    fn from_data(data: Vec<u8>) -> std::io::Result<Self> {
+        Ok(Self {
+            data,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RelayIntroduceAck {
+    pub status: RelayIntroduceAckStatus,
+    pub extensions: Vec<RelayIntroduceAckExtension>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RelayIntroduceAckStatus {
+    Success,
+    ServiceIDNotRecognized,
+    BadMessageFormat,
+    CantRelayCellToService,
+    Unrecognized(u16)
+}
+
+#[derive(Debug)]
+pub enum RelayIntroduceAckExtension {
+    Unrecognized(u8, Vec<u8>)
+}
+
+impl RelayIntroduceAck {
+    fn data(&self) -> std::io::Result<Vec<u8>> {
+        unimplemented!()
+    }
+
+    fn from_data(data: Vec<u8>) -> std::io::Result<Self> {
+        let mut cursor = std::io::Cursor::new(data);
+
+        let status = match ReadBytesExt::read_u16::<BigEndian>(&mut cursor)? {
+            0 => RelayIntroduceAckStatus::Success,
+            1 => RelayIntroduceAckStatus::ServiceIDNotRecognized,
+            2 => RelayIntroduceAckStatus::BadMessageFormat,
+            3 => RelayIntroduceAckStatus::CantRelayCellToService,
+            id => RelayIntroduceAckStatus::Unrecognized(id)
+        };
+
+        let mut extensions = Vec::new();
+        let n_extensions = ReadBytesExt::read_u8(&mut cursor)?;
+        for _ in 0..n_extensions {
+            let ext_type = ReadBytesExt::read_u8(&mut cursor)?;
+            let ext_len = ReadBytesExt::read_u8(&mut cursor)?;
+            let mut data = vec![0; ext_len as usize];
+            std::io::Read::read_exact(&mut cursor, &mut data)?;
+
+            match ext_type {
+                _ => extensions.push(RelayIntroduceAckExtension::Unrecognized(ext_type, data))
+            }
+        }
+
+        Ok(Self {
+            status,
+            extensions
         })
     }
 }

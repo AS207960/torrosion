@@ -245,6 +245,22 @@ pub(crate) fn select_directory_server(consensus: &consensus::Consensus) -> Optio
     servers.first().map(|r| *r)
 }
 
+pub(crate) fn select_rendezvous_server(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
+    let mut rng = rand::thread_rng();
+    let mut servers = consensus.routers.iter().filter(|r| {
+        r.status.iter().any(|f| f == "V2Dir")
+    }).filter(|r| {
+        r.status.iter().any(|f| f == "Running")
+    }).filter(|r| {
+        match &r.protocols {
+            Some(e) => e.supports("HSRend", 2),
+            None => false,
+        }
+    }).collect::<Vec<_>>();
+    servers.shuffle(&mut rng);
+    servers.first().map(|r| *r)
+}
+
 pub(crate) fn select_node(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
     let mut rng = rand::thread_rng();
     let mut servers = consensus.routers.iter().filter(|r| {

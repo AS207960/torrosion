@@ -100,7 +100,7 @@ impl Stream {
                                     package_window += crate::STREAM_WINDOW_INCREMENT;
                                 }
                                 cell::RelayCommand::End(e) => {
-                                    info!("{}: circuit {}, stream {} closed ({:?})", identity, circuit_id, stream_id, e.reason);
+                                    debug!("{}: circuit {}, stream {} closed ({:?})", identity, circuit_id, stream_id, e.reason);
                                     return;
                                 }
                                 _ => match command_in_tx.send(command).await {

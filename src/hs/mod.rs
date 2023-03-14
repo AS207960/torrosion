@@ -2,13 +2,14 @@ use base64::Engine;
 use base64::prelude::*;
 use chrono::prelude::*;
 use sha3::Digest;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use rand::prelude::*;
-use tokio::io::AsyncReadExt;
 
 mod descriptor;
 mod first_layer;
 pub mod second_layer;
+pub mod con;
+pub mod http;
 
 const BLIND_STRING: &[u8] = b"Derive temporary signing key\0";
 const ED25519_BASEPOINT: &[u8] =
@@ -308,7 +309,7 @@ impl HSAddress {
 
     pub async fn fetch_ds<'a, S: crate::storage::Storage + Send + Sync + 'static>(
         &self, client: &crate::Client<S>, hs_relays: &'a HSRelays
-    ) -> std::io::Result<second_layer::Descriptor> {
+    ) -> std::io::Result<(second_layer::Descriptor, Vec<u8>)> {
         let consensus = client.consensus().await?;
         let (blinded_key, hs_subcred) = self.blinded_key(&consensus);
 
@@ -330,16 +331,17 @@ impl HSAddress {
         )?;
         let second_layer = second_layer::Descriptor::parse(&mut second_layer_bytes.as_slice()).await?;
 
-        Ok(second_layer)
+        Ok((second_layer, hs_subcred))
     }
 }
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Copy)]
 pub struct HSRelayIndex([u8; 32]);
 
+#[derive(Debug, Clone)]
 pub struct HSRelays(Vec<HSRelay>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HSRelay {
     router: crate::net_status::consensus::Router,
     index: HSRelayIndex
@@ -362,7 +364,7 @@ pub async fn get_hs_dirs<S: crate::storage::Storage + Send + Sync + 'static>(cli
         }
     }).collect::<Vec<_>>();
 
-    let mut relays = futures::stream::iter(hs_dirs.into_iter())
+    let mut relays = futures::future::join_all(futures::stream::iter(hs_dirs.into_iter())
         .map(|r| async move { (crate::net_status::descriptor::get_server_descriptor(&r, client).await, r) })
         .buffer_unordered(25)
         .filter_map(|(d, r)| async move {
@@ -374,19 +376,20 @@ pub async fn get_hs_dirs<S: crate::storage::Storage + Send + Sync + 'static>(cli
                 }
             }
         })
-        .map(|(d, r)| {
-            let mut hasher = sha3::Sha3_256::new();
-            hasher.update(b"node-idx");
-            hasher.update(&d.ed25519_master_key);
-            hasher.update(&shared_rand);
-            hasher.update(period_number.to_be_bytes());
-            hasher.update(period_length.to_be_bytes());
-            HSRelay {
-                router: r,
-                index: HSRelayIndex(hasher.finalize().try_into().unwrap())
-            }
-        })
-        .collect::<Vec<_>>().await;
+        .map(|(d, r)| async move {
+            tokio::task::spawn_blocking(move || {
+                let mut hasher = sha3::Sha3_256::new();
+                hasher.update(b"node-idx");
+                hasher.update(&d.ed25519_master_key);
+                hasher.update(&shared_rand);
+                hasher.update(period_number.to_be_bytes());
+                hasher.update(period_length.to_be_bytes());
+                HSRelay {
+                    router: r,
+                    index: HSRelayIndex(hasher.finalize().try_into().unwrap())
+                }
+            }).await.unwrap()
+        }).collect::<Vec<_>>().await).await;
 
     relays.sort_by_key(|r| r.index);
 
@@ -424,19 +427,23 @@ fn time_period_started_before_midnight(consensus: &crate::net_status::consensus:
     time_period_start < midnight
 }
 
-fn shared_random_value(consensus: &crate::net_status::consensus::Consensus) -> Vec<u8> {
+fn shared_random_value(consensus: &crate::net_status::consensus::Consensus) -> [u8; 32] {
     match if time_period_started_before_midnight(&consensus) {
-        &consensus.previous_shared_random_value
+        consensus.previous_shared_random_value
+            .as_ref()
+            .and_then(|c| TryInto::<[u8; 32]>::try_into(c.value.clone()).ok())
     } else {
-        &consensus.current_shared_random_value
+        consensus.current_shared_random_value
+            .as_ref()
+            .and_then(|c| TryInto::<[u8; 32]>::try_into(c.value.clone()).ok())
     } {
-        Some(v) => v.value.clone(),
+        Some(v) => v,
         None => {
             let mut hasher = sha3::Sha3_256::new();
             hasher.update(b"shared-random-disaster");
             hasher.update(time_period_length_minutes(consensus).to_be_bytes());
             hasher.update(current_time_period_number(consensus).to_be_bytes());
-            hasher.finalize().to_vec()
+            hasher.finalize().into()
         }
     }
 }

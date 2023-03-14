@@ -1,5 +1,7 @@
 use base64::prelude::*;
+use byteorder::ReadBytesExt;
 use crate::net_status::{get_all, get_at_most_once, get_exactly_once};
+use std::io::Read;
 
 #[derive(Debug)]
 pub struct Descriptor {
@@ -73,9 +75,9 @@ impl Line {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IntroductionPoint {
-    pub(crate) link_specifiers: Vec<u8>,
+    pub(crate) link_specifiers: Vec<crate::cell::LinkSpecifier>,
     pub(crate) ntor_onion_key: [u8; 32],
     pub(crate) ntor_enc_key: [u8; 32],
     pub(crate) auth_key: crate::cert::Cert,
@@ -105,6 +107,17 @@ impl IntroductionPoint {
             std::io::ErrorKind::InvalidInput, "Invalid introduction point",
         ))?;
 
+        let mut link_spec = std::io::Cursor::new(link_spec);
+        let mut link_specifiers = vec![];
+        let nspec = link_spec.read_u8()?;
+        for _ in 0..nspec {
+            let lstype = link_spec.read_u8()?;
+            let lslen = link_spec.read_u8()?;
+            let mut lspec = vec![0; lslen as usize];
+            link_spec.read_exact(&mut lspec)?;
+            link_specifiers.push(crate::cell::LinkSpecifier::from_data(lstype, lspec)?);
+        }
+
         let mut line = vec![];
         while let Some(p) = IntroductionPointLine::parse(reader).await? {
             line.push(p);
@@ -131,7 +144,7 @@ impl IntroductionPoint {
         let enc_key_cert = crate::cert::Cert::from_bytes(enc_key_cert)?;
 
         Ok(Some(Self {
-            link_specifiers: link_spec,
+            link_specifiers,
             ntor_onion_key,
             ntor_enc_key,
             auth_key,

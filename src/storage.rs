@@ -43,9 +43,8 @@ pub trait Storage {
     fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
     fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a;
 
-    fn clean_server_descriptors<'a>(&'a self) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
-    fn save_server_descriptor<'a>(&'a self, digest: &[u8], descriptor: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
-    fn load_server_descriptor<'a>(&'a self, digest: &[u8]) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a;
+    fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a;
+    fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a;
 }
 
 pub struct FileStorage {
@@ -109,19 +108,15 @@ impl Storage for FileStorage {
        }
     }
 
-    fn clean_server_descriptors<'a>(&'a self) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a {
-        async {
-            let mut p = self.root.join("server-descriptor");
-            tokio::fs::remove_dir_all(&p).await?;
-            tokio::fs::create_dir(&p).await?;
-            Ok(())
-        }
-    }
-
-    fn save_server_descriptor<'a>(&'a self, digest: &[u8], descriptor: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a {
+    fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> impl futures::Future<Output = std::io::Result<()>> + Send + 'a {
         let digest = hex::encode(digest);
         async move {
             let mut p = self.root.join("server-descriptor");
+            p.push(identity.to_string());
+            if tokio::fs::metadata(&p).await.is_ok() {
+                tokio::fs::remove_dir_all(&p).await?;
+            }
+            tokio::fs::create_dir(&p).await?;
             p.push(digest);
             let mut f = tokio::fs::File::create(p).await?;
             f.write_all(descriptor).await?;
@@ -129,10 +124,11 @@ impl Storage for FileStorage {
         }
     }
 
-    fn load_server_descriptor<'a>(&'a self, digest: &[u8]) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a {
+    fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> impl futures::Future<Output = std::io::Result<impl AsyncRead + Unpin + Send>> + Send + 'a {
         let digest = hex::encode(digest);
         async move {
             let mut p = self.root.join("server-descriptor");
+            p.push(identity.to_string());
             p.push(digest);
             let f = tokio::fs::File::open(p).await?;
             Ok(f)

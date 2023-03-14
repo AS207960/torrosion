@@ -2,7 +2,7 @@ use std::io::Read;
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::prelude::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Cert {
     signed_data: Vec<u8>,
     pub version: u8,
@@ -25,20 +25,30 @@ pub enum CertType {
     OnionServiceNtorEncryptionKey = 0x0B,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum KeyType {
     Ed25519([u8; 32]),
     RsaSha256([u8; 32]),
     X509Sha256([u8; 32]),
 }
 
-#[derive(Debug)]
+impl KeyType {
+    pub fn as_bytes(&self) -> [u8; 32] {
+        match self {
+            KeyType::Ed25519(k) => *k,
+            KeyType::RsaSha256(k) => *k,
+            KeyType::X509Sha256(k) => *k,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CertExtension {
     pub extension_type: CertExtensionType,
     pub critical: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CertExtensionType {
     SignedWithEd25519Key([u8; 32]),
     Other((u8, Vec<u8>))

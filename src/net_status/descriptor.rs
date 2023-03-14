@@ -25,7 +25,10 @@ async fn parse_server_descriptor<S: crate::storage::Storage + Send + Sync + 'sta
     if !descriptor.verify() {
         return Err(std::io::Error::new(std::io::ErrorKind::Other, "Descriptor verification failed"));
     }
-    client.storage.save_server_descriptor(&descriptor.rsa_hash.as_ref(), body.buf()).await?;
+    {
+        let d = body.buf();
+        client.storage.save_server_descriptor(&descriptor.identity, &descriptor.rsa_hash.as_ref(), d)
+    }.await?;
 
     Ok(descriptor)
 }
@@ -33,7 +36,7 @@ async fn parse_server_descriptor<S: crate::storage::Storage + Send + Sync + 'sta
 pub(crate) async fn get_server_descriptor<S: crate::storage::Storage + Send + Sync + 'static>(
     router: &super::consensus::Router, client: &crate::Client<S>,
 ) -> std::io::Result<Descriptor> {
-    if let Ok(mut r) = client.storage.load_server_descriptor(&router.digest).await {
+    if let Ok(mut r) = client.storage.load_server_descriptor(&router.identity, &router.digest).await {
         let descriptor = Descriptor::parse(&mut r).await?;
 
         if descriptor.rsa_hash.as_ref() != router.digest {
@@ -131,6 +134,21 @@ impl Descriptor {
             crate::cert::KeyType::Ed25519(k) => k,
             _ => panic!("Invalid key type"),
         }
+    }
+
+    pub fn to_link_specifiers(&self) -> Vec<crate::cell::LinkSpecifier> {
+        let mut link_specifiers = Vec::new();
+        link_specifiers.extend(self.or_addresses.iter().filter_map(|addr| match addr {
+            std::net::SocketAddr::V4(addr) => Some(crate::cell::LinkSpecifier::IPv4Address(*addr)),
+            _ => None,
+        }));
+        link_specifiers.push(crate::cell::LinkSpecifier::LegacyIdentity(self.identity));
+        link_specifiers.extend(self.or_addresses.iter().filter_map(|addr| match addr {
+            std::net::SocketAddr::V6(addr) => Some(crate::cell::LinkSpecifier::IPv6Address(*addr)),
+            _ => None,
+        }));
+        link_specifiers.push(crate::cell::LinkSpecifier::Ed25519Identity(self.ed25519_master_key));
+        link_specifiers
     }
 
     fn verify(&self) -> bool {

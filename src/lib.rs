@@ -31,16 +31,27 @@ static CIRCUIT_WINDOW_INCREMENT: isize = 100;
 static STREAM_WINDOW_INITIAL: isize = 500;
 static STREAM_WINDOW_INCREMENT: isize = 50;
 static DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-type Aes128Enc = ctr::Ctr128BE<aes::Aes128Enc>;
-type Aes128Dec = ctr::Ctr128BE<aes::Aes128Enc>;
-type Aes256= ctr::Ctr128BE<aes::Aes256>;
+type Aes128 = ctr::Ctr128BE<aes::Aes128>;
+type Aes256 = ctr::Ctr128BE<aes::Aes256>;
 
 type Consensus = std::sync::Arc<tokio::sync::RwLock<Option<net_status::consensus::Consensus>>>;
 
 pub struct Client<S: storage::Storage> {
     storage: std::sync::Arc<S>,
     current_consensus: Consensus,
-    ds_circuit: std::sync::Arc<tokio::sync::RwLock<Option<circuit::Circuit>>>
+    ds_circuit: std::sync::Arc<tokio::sync::RwLock<Option<circuit::Circuit>>>,
+    hs_relays: std::sync::Arc<tokio::sync::RwLock<Option<hs::HSRelays>>>
+}
+
+impl<S: storage::Storage> Clone for Client<S> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            current_consensus: self.current_consensus.clone(),
+            ds_circuit: self.ds_circuit.clone(),
+            hs_relays: self.hs_relays.clone()
+        }
+    }
 }
 
 impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
@@ -48,7 +59,8 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
         Self {
             storage: std::sync::Arc::new(storage),
             current_consensus: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-            ds_circuit: std::sync::Arc::new(tokio::sync::RwLock::new(None))
+            ds_circuit: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            hs_relays: std::sync::Arc::new(tokio::sync::RwLock::new(None))
         }
     }
 
@@ -84,6 +96,20 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
         let circ = con.create_circuit_fast().await?;
         *l = Some(circ.clone());
         Ok(circ)
+    }
+
+    pub(crate) async fn get_hs_relays(&self) -> std::io::Result<hs::HSRelays> {
+        match self.hs_relays.read().await.deref() {
+            Some(h) => {
+                return Ok(h.clone());
+            },
+            None => {}
+        }
+
+        let mut l = self.hs_relays.write().await;
+        let dirs = hs::get_hs_dirs(&self).await?;
+        *l = Some(dirs.clone());
+        Ok(dirs)
     }
 
     pub async fn run(&mut self) {
@@ -144,13 +170,15 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
 
         let storage = self.storage.clone();
         let consensus = self.current_consensus.clone();
+        let hs_relays = self.hs_relays.clone();
         tokio::task::spawn(async move {
-            Self::consensus_loop(consensus, storage).await;
+            Self::consensus_loop(consensus, hs_relays, storage).await;
         });
     }
 
     async fn consensus_loop(
         consensus: Consensus,
+        hs_relays: std::sync::Arc<tokio::sync::RwLock<Option<hs::HSRelays>>>,
         storage: std::sync::Arc<S>
     ) {
         loop {
@@ -158,13 +186,12 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                 consensus.fresh_until > chrono::Utc::now()
             });
             if !consensus_is_current {
-
                 let (tcp_stream, identity) = match consensus.read().await.deref() {
                     None => {
                         // We have no stored consensus
                         let fallback_dirs = fallback::FallbackDirs::new();
                         let fallback = {
-                            let mut rng = rand::thread_rng();
+                            let mut rng = thread_rng();
                             fallback_dirs.fallbacks.choose(&mut rng).unwrap()
                         };
                         info!("Using fallback {} for consensus", fallback.id);
@@ -257,7 +284,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                     let dir_client = dir_client.clone();
                     let storage = storage.clone();
                     async move {
-                        info!("Fetching key for authority {} ({})", auth.name, auth.id);
+                        debug!("Fetching key for authority {} ({})", auth.name, auth.id);
                         let url = format!("http://dummy/tor/keys/fp/{}.z", auth.id.to_hex()).parse::<hyper::Uri>().unwrap();
                         let res = http::HyperResponse::new( match tokio::time::timeout(
                             DEFAULT_TIMEOUT, dir_client.get(url)
@@ -363,10 +390,8 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                     if let Err(e) = storage.save_consensus(b).await {
                         warn!("Failed to save consensus: {}", e);
                     }
-                    // if let Err(e) = storage.clean_server_descriptors().await {
-                    //     warn!("Failed to clean server descriptors: {}", e);
-                    // }
                     consensus.write().await.replace(new_consensus);
+                    *hs_relays.write().await = None;
                 } else {
                     continue;
                 }

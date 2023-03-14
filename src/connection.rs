@@ -102,7 +102,7 @@ impl InnerConnection {
                 format!("{}: no common protocol versions", self.identity)
             ));
         }
-        info!("{}: using protocol version {}", self.identity, self.protocol_version);
+        debug!("{}: using protocol version {}", self.identity, self.protocol_version);
 
         let cell = self.read_next_cell().await?;
         if cell.circuit_id != 0 {
@@ -133,7 +133,7 @@ impl InnerConnection {
                 format!("{}: peer identity mismatch", self.identity)
             ));
         }
-        info!("{}: validated identity certificate", self.identity);
+        debug!("{}: validated identity certificate", self.identity);
 
         let cell = self.read_next_cell().await?;
         if cell.circuit_id != 0 {
@@ -148,7 +148,7 @@ impl InnerConnection {
                 format!("unexpected command in negotiation {:?}", o)
             )),
         };
-        trace!("{}: received auth challenge {:?}", self.identity, auth_challenge);
+        debug!("{}: received auth challenge {:?}", self.identity, auth_challenge);
 
         // Here is where authentication would go, if we where to implement it.
 
@@ -652,7 +652,7 @@ impl Connection {
         };
         // let tls_connector = tokio_rustls::TlsConnector::from(crate::TLS_CLIENT_CONFIG.clone());
         // let tls_stream = tls_connector.connect(rustls::client::ServerName::try_from("example.com").unwrap(), tcp_stream).await?;
-        info!("TLS connection to {} established", identity);
+        debug!("TLS connection to {} established", identity);
         if !is_v3_handshake(&tls_stream) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other, "did not present a v3 handshake",
@@ -666,7 +666,7 @@ impl Connection {
             peer_addr,
         };
         let protocol_version = inner.negotiate_connection().await?;
-        info!("{}: connection established", identity);
+        debug!("{}: connection established", identity);
         let (cell_rx, cell_tx) = inner.run();
 
         let connection = Self {
@@ -714,7 +714,6 @@ impl Connection {
         secret_input.extend(b"ntor-curve25519-sha256-1");
 
         let t_mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"ntor-curve25519-sha256-1:mac");
-        let t_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"ntor-curve25519-sha256-1:key_extract");
         let t_verify = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"ntor-curve25519-sha256-1:verify");
 
         let verify = ring::hmac::sign(&t_verify, &secret_input);
@@ -728,7 +727,7 @@ impl Connection {
         auth_input.extend(b"Server");
         let auth = ring::hmac::sign(&t_mac, &auth_input);
 
-        if auth.as_ref() != auth_s {
+        if ring::constant_time::verify_slices_are_equal(auth.as_ref(), &auth_s).is_err() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other, "KDF mismatch",
             ));
@@ -795,7 +794,7 @@ impl Connection {
         };
 
         circuit.insert_node(df, db, kf, kb).await;
-        info!("{}: circuit {} created", self.identity, circuit.get_circuit_id());
+        debug!("{}: circuit {} created", self.identity, circuit.get_circuit_id());
         Ok(circuit)
     }
 
@@ -868,7 +867,7 @@ impl Connection {
         }
 
         circuit.insert_node(df, db, kf, kb).await;
-        info!("{}: circuit {} created", self.identity, circuit.get_circuit_id());
+        debug!("{}: circuit {} created", self.identity, circuit.get_circuit_id());
         Ok(circuit)
     }
 }

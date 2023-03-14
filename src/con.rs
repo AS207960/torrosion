@@ -12,7 +12,7 @@ pub(crate) async fn connect_to_fallback(fallback: &crate::fallback::FallbackDir)
     debug!("Connecting to fallback {} on v4", fallback.id);
     match tokio::net::TcpStream::connect(fallback.v4).await {
         Ok(stream) => {
-            info!("TCP connection to fallback {} established", fallback.id);
+            debug!("TCP connection to fallback {} established", fallback.id);
             return Ok(stream)
         },
         Err(e) => {
@@ -27,7 +27,7 @@ pub(crate) async fn connect_to_router(router: &crate::net_status::consensus::Rou
         debug!("Connecting to router {} ({})", router.name, router.identity);
         match tokio::net::TcpStream::connect(a).await {
             Ok(stream) => {
-                info!("TCP connection to router {} established", router.name);
+                debug!("TCP connection to router {} established", router.name);
                 return Ok(stream)
             },
             Err(e) => warn!("Failed to connect to router {}: {}", router.name, e),
