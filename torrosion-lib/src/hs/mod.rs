@@ -23,11 +23,8 @@ pub struct HSAddress {
 }
 
 impl HSAddress {
-    pub fn from_uri(uri: &hyper::Uri) -> std::io::Result<Self> {
-        let authority = uri.authority().ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, "Not an authority"
-        ))?;
-        let host = authority.host().trim_end_matches(".");
+    pub fn from_str(host: &str) -> std::io::Result<Self> {
+        let host = host.trim_end_matches(".");
         let (host, tld) = match host.rsplit_once(".") {
             Some(h) => h,
             None => return Err(std::io::Error::new(
@@ -75,8 +72,15 @@ impl HSAddress {
             ));
         }
 
-
         Ok(Self { key })
+    }
+
+    pub fn from_uri(uri: &hyper::Uri) -> std::io::Result<Self> {
+        let authority = uri.authority().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Not an authority"
+        ))?;
+
+        Self::from_str(authority.host())
     }
 
     fn blinding_param(&self, consensus: &crate::net_status::consensus::Consensus) -> [u8; 32] {
