@@ -16,6 +16,7 @@ mod http;
 pub mod hs;
 pub mod storage;
 
+use std::fmt::Formatter;
 use std::ops::Deref;
 use rand::prelude::*;
 use futures::StreamExt;
@@ -41,6 +42,25 @@ pub struct Client<S: storage::Storage> {
     current_consensus: Consensus,
     ds_circuit: std::sync::Arc<tokio::sync::RwLock<Option<circuit::Circuit>>>,
     hs_relays: std::sync::Arc<tokio::sync::RwLock<Option<hs::HSRelays>>>
+}
+
+impl<S: storage::Storage> std::fmt::Debug for Client<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Client");
+        d.field("storage", &"Arc<Storage>");
+        match self.current_consensus.try_read() {
+            Ok(c) => {
+                match c.deref() {
+                    Some(_) => d.field("current_consensus", &"Some(...)"),
+                    None => d.field("current_consensus", &"None")
+                }
+            }
+            Err(_) => d.field("current_consensus", &"<locked>")
+        };
+        d.field("ds_circuit", &self.ds_circuit);
+        d.field("hs_relays", &self.hs_relays);
+        d.finish_non_exhaustive()
+    }
 }
 
 impl<S: storage::Storage> Clone for Client<S> {

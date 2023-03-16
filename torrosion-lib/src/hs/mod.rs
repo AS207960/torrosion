@@ -432,8 +432,14 @@ impl HSAddress {
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Copy)]
 pub struct HSRelayIndex([u8; 32]);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HSRelays(Vec<HSRelay>);
+
+impl std::fmt::Debug for HSRelays {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[...]")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct HSRelay {
