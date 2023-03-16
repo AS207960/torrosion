@@ -47,9 +47,8 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> hyper::service::Service
             };
             let port = authority.port_u16().unwrap_or(default_port);
 
-            let dirs = client.get_hs_relays().await?;
-            let (ds, subcred) = hs_address.fetch_ds(&client, &dirs, priv_key).await.unwrap();
-            let hs_circ = super::con::connect(&client, &ds, &subcred).await.unwrap();
+            let (ds, subcred) = hs_address.fetch_ds(&client,priv_key).await?;
+            let hs_circ = super::con::connect(&client, &ds, &subcred).await?;
 
             let con_to = format!("{}:{}", authority.host(), port);
             hs_circ.relay_begin(&con_to, None).await

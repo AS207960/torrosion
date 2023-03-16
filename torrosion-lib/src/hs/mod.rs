@@ -374,12 +374,13 @@ impl HSAddress {
     }
 
     pub async fn fetch_ds<'a, S: crate::storage::Storage + Send + Sync + 'static>(
-        &self, client: &crate::Client<S>, hs_relays: &'a HSRelays, private_key: Option<[u8; 32]>
+        &self, client: &crate::Client<S>, private_key: Option<[u8; 32]>
     ) -> std::io::Result<(second_layer::Descriptor, Vec<u8>)> {
         let consensus = client.consensus().await?;
+        let hs_relays = client.get_hs_relays().await?;
         let (blinded_key, hs_subcred) = self.blinded_key(&consensus);
 
-        let descriptor = self.download_ds(&consensus, client, hs_relays, &blinded_key).await?;
+        let descriptor = self.download_ds(&consensus, client, &hs_relays, &blinded_key).await?;
 
         if !descriptor.verify(&blinded_key) {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, "Failed to verify HS descriptor"));
