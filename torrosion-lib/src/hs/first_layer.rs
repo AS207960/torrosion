@@ -46,7 +46,7 @@ enum Line {
     DescriptorAuthEphemeralKey(Vec<u8>),
     AuthClient(AuthClient),
     Encrypted(Vec<u8>),
-    CAACritical,
+    CAACritical(()),
 }
 
 impl Line {
@@ -87,7 +87,7 @@ impl Line {
                     ))?;
                     Self::Encrypted(encrypted.contents)
                 },
-                "caa-critical" => Self::CAACritical,
+                "caa-critical" => Self::CAACritical(()),
                 _ => continue
             }))
         }

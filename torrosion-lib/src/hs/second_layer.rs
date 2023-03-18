@@ -3,6 +3,7 @@ use byteorder::ReadBytesExt;
 use crate::net_status::{get_all, get_at_most_once, get_exactly_once};
 use std::io::Read;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Descriptor {
     pub(crate) create2_formats: Vec<u16>,
@@ -40,7 +41,7 @@ impl Descriptor {
 enum Line {
     Create2Formats(Vec<u16>),
     IntroAuthRequired(Vec<String>),
-    SingleOnionService,
+    SingleOnionService(()),
     CAA(CAA),
 }
 
@@ -69,8 +70,8 @@ impl Line {
                 "intro-auth-required" => {
                     Self::IntroAuthRequired(parts.map(|p| p.to_string()).collect())
                 },
-                "single-onion-service" => Self::SingleOnionService,
-                "caa" => Self::CAA(CAA::parse(&mut parts)?)
+                "single-onion-service" => Self::SingleOnionService(()),
+                "caa" => Self::CAA(CAA::parse(&mut parts)?),
                 _ => continue
             }))
         }
