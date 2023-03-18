@@ -1,5 +1,5 @@
 use base64::prelude::*;
-use crate::net_status::{get_all, get_exactly_once};
+use crate::net_status::{get_all, get_at_most_once, get_exactly_once};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -7,6 +7,7 @@ pub struct Descriptor {
     pub(crate) ephemeral_key: [u8; 32],
     pub(crate) auth_clients: Vec<AuthClient>,
     pub(crate) encrypted: Vec<u8>,
+    pub caa_critical: bool,
 }
 
 impl Descriptor {
@@ -34,6 +35,7 @@ impl Descriptor {
             ephemeral_key,
             auth_clients: get_all!(line, Line::AuthClient),
             encrypted: get_exactly_once!(line, Line::Encrypted),
+            caa_critical: get_at_most_once!(line, Line::CAACritical).is_some(),
         })
     }
 }
@@ -44,6 +46,7 @@ enum Line {
     DescriptorAuthEphemeralKey(Vec<u8>),
     AuthClient(AuthClient),
     Encrypted(Vec<u8>),
+    CAACritical,
 }
 
 impl Line {
@@ -84,6 +87,7 @@ impl Line {
                     ))?;
                     Self::Encrypted(encrypted.contents)
                 },
+                "caa-critical" => Self::CAACritical,
                 _ => continue
             }))
         }

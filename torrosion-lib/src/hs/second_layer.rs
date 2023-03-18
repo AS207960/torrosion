@@ -5,10 +5,11 @@ use std::io::Read;
 
 #[derive(Debug)]
 pub struct Descriptor {
-    pub create2_formats: Vec<u16>,
-    pub intro_auth_required: Option<Vec<String>>,
+    pub(crate) create2_formats: Vec<u16>,
+    pub(crate) intro_auth_required: Option<Vec<String>>,
     pub single_onion_service: bool,
-    pub intro_points: Vec<IntroductionPoint>,
+    pub(crate) intro_points: Vec<IntroductionPoint>,
+    pub caa: Vec<CAA>
 }
 
 impl Descriptor {
@@ -30,6 +31,7 @@ impl Descriptor {
             intro_auth_required: get_at_most_once!(line, Line::IntroAuthRequired),
             single_onion_service: get_at_most_once!(line, Line::SingleOnionService).is_some(),
             intro_points,
+            caa: get_all!(line, Line::CAA),
         })
     }
 }
@@ -38,7 +40,8 @@ impl Descriptor {
 enum Line {
     Create2Formats(Vec<u16>),
     IntroAuthRequired(Vec<String>),
-    SingleOnionService(()),
+    SingleOnionService,
+    CAA(CAA),
 }
 
 impl Line {
@@ -66,9 +69,8 @@ impl Line {
                 "intro-auth-required" => {
                     Self::IntroAuthRequired(parts.map(|p| p.to_string()).collect())
                 },
-                "single-onion-service" => {
-                    Self::SingleOnionService(())
-                }
+                "single-onion-service" => Self::SingleOnionService,
+                "caa" => Self::CAA(CAA::parse(&mut parts)?)
                 _ => continue
             }))
         }
@@ -216,5 +218,42 @@ impl IntroductionPointLine {
                 _ => continue
             }))
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CAA {
+    pub flags: u8,
+    pub tag: String,
+    pub value: String,
+}
+
+impl CAA {
+    fn parse(line: &mut std::str::Split<&str>) -> std::io::Result<Self> {
+        let flags = line.next().ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+        ))?;
+        let flags = flags.parse::<u8>().map_err(|_| std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+        ))?;
+        let tag = line.next().ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+        ))?.to_string();
+        let mut value = line.collect::<Vec<_>>().join(" ");
+
+        if value.starts_with(" ") {
+            if !value.ends_with(" ") {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+                ))
+            }
+            value = value.replace("\\\"", "\"");
+        }
+
+        Ok(Self {
+            flags,
+            tag,
+            value,
+        })
     }
 }
