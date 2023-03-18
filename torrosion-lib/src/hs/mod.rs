@@ -373,9 +373,9 @@ impl HSAddress {
         Ok(encrypted)
     }
 
-    pub async fn fetch_ds<'a, S: crate::storage::Storage + Send + Sync + 'static>(
-        &self, client: &crate::Client<S>, private_key: Option<[u8; 32]>
-    ) -> std::io::Result<(second_layer::Descriptor, Vec<u8>)> {
+    pub async fn fetch_ds_first_layer<'a, S: crate::storage::Storage + Send + Sync + 'static>(
+        &self, client: &crate::Client<S>,
+    ) -> std::io::Result<(descriptor::Descriptor, first_layer::Descriptor, [u8; 32], Vec<u8>)> {
         let consensus = client.consensus().await?;
         let hs_relays = client.get_hs_relays().await?;
         let (blinded_key, hs_subcred) = self.blinded_key(&consensus);
@@ -392,6 +392,13 @@ impl HSAddress {
         )?;
         let first_layer = first_layer::Descriptor::parse(&mut inner_descriptor_bytes.as_slice()).await?;
 
+        Ok((descriptor, first_layer, blinded_key, hs_subcred))
+    }
+
+    pub async fn get_ds_second_layer(
+        descriptor: descriptor::Descriptor, first_layer: first_layer::Descriptor,
+        private_key: Option<[u8; 32]>, blinded_key: &[u8; 32], hs_subcred: &[u8]
+    ) -> std::io::Result<second_layer::Descriptor> {
         let descriptor_cookie = if let Some(private_key) = private_key {
             use sha3::digest::{Update, ExtendableOutput};
             use aes::cipher::{KeyIvInit, StreamCipher};
@@ -428,7 +435,20 @@ impl HSAddress {
             &second_layer_secret_data, &hs_subcred, descriptor.revision_counter, b"hsdir-encrypted-data",
             &first_layer.encrypted,
         )?;
-        let second_layer = second_layer::Descriptor::parse(&mut second_layer_bytes.as_slice()).await?;
+
+        second_layer::Descriptor::parse(&mut second_layer_bytes.as_slice()).await
+    }
+
+    pub async fn fetch_ds<'a, S: crate::storage::Storage + Send + Sync + 'static>(
+        &self, client: &crate::Client<S>, private_key: Option<[u8; 32]>
+    ) -> std::io::Result<(second_layer::Descriptor, Vec<u8>)> {
+        let (
+            descriptor, first_layer, blinded_key, hs_subcred
+        ) = self.fetch_ds_first_layer(client).await?;
+
+        let second_layer = Self::get_ds_second_layer(
+            descriptor, first_layer, private_key, &blinded_key, &hs_subcred
+        ).await?;
 
         Ok((second_layer, hs_subcred))
     }

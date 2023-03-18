@@ -1,6 +1,6 @@
 [package]
 name = "torrosion"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 repository = "https://github.com/AS207960/libtor"
 authors = ["Q Misell <q@as207960.net>"]
