@@ -1,4 +1,3 @@
-#![feature(io_error_more)]
 #[macro_use]
 extern crate log;
 extern crate core;
@@ -91,7 +90,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
     pub(crate) async fn consensus(&self) -> std::io::Result<net_status::consensus::Consensus> {
         match self.current_consensus.read().await.deref() {
             Some(c) => Ok(c.clone()),
-            None => Err(std::io::Error::new(std::io::ErrorKind::NetworkDown, "Not ready"))
+            None => Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "Not ready"))
         }
     }
 

@@ -286,7 +286,7 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
     }
 
     return Err(std::io::Error::new(
-        std::io::ErrorKind::HostUnreachable, "Failed to send introduction",
+        std::io::ErrorKind::ConnectionReset, "Failed to send introduction",
     ))
 }
 
@@ -315,7 +315,7 @@ pub async fn connect<S: crate::storage::Storage + Send + Sync + 'static>(
         r += 1;
         if r > crate::DEFAULT_RETRIES {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::HostUnreachable, "Failed to make rendezvous point",
+                std::io::ErrorKind::ConnectionReset, "Failed to make rendezvous point",
             ))
         }
     };

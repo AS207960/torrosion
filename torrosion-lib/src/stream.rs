@@ -195,7 +195,7 @@ impl Stream {
                 std::io::ErrorKind::ConnectionReset, "stream closed",
             ),
             cell::EndReason::ResolveFailed => std::io::Error::new(
-                std::io::ErrorKind::HostUnreachable, "resolve failed",
+                std::io::ErrorKind::AddrNotAvailable, "resolve failed",
             ),
             cell::EndReason::ConnectRefused => std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused, "connection refused",
@@ -210,7 +210,7 @@ impl Stream {
                 std::io::ErrorKind::TimedOut, "timeout",
             ),
             cell::EndReason::NoRoute => std::io::Error::new(
-                std::io::ErrorKind::NetworkUnreachable, "no route",
+                std::io::ErrorKind::NotConnected, "no route",
             ),
             cell::EndReason::Hibernating => std::io::Error::new(
                 std::io::ErrorKind::ConnectionReset, "hibernating",
@@ -219,7 +219,7 @@ impl Stream {
                 std::io::ErrorKind::Other, "internal error",
             ),
             cell::EndReason::ResourceLimit => std::io::Error::new(
-                std::io::ErrorKind::ResourceBusy, "resource limit",
+                std::io::ErrorKind::OutOfMemory, "resource limit",
             ),
             cell::EndReason::ConnReset => std::io::Error::new(
                 std::io::ErrorKind::ConnectionReset, "connection reset",

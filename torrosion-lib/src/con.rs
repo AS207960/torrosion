@@ -33,5 +33,5 @@ pub(crate) async fn connect_to_router(router: &crate::net_status::consensus::Rou
             Err(e) => warn!("Failed to connect to router {}: {}", router.name, e),
         }
     }
-    return Err(std::io::Error::new(std::io::ErrorKind::HostUnreachable, "No addresses available"))
+    return Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "No addresses available"))
 }

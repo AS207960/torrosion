@@ -442,7 +442,7 @@ impl InnerCircuit {
     ) -> std::io::Result<Vec<u8>> {
         if command.node >= nodes.len() {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::HostUnreachable,
+                std::io::ErrorKind::AddrNotAvailable,
                 format!(
                     "invalid destination; circuit only has {} nodes, requested {}",
                     nodes.len(), command.node

@@ -171,7 +171,7 @@ impl HSAddress {
         let (mut con, first_router_descriptor) = loop {
             if r >= crate::DEFAULT_RETRIES {
                 return Err(std::io::Error::new(
-                    std::io::ErrorKind::HostUnreachable, "Failed to make rendezvous point",
+                    std::io::ErrorKind::ConnectionReset, "Failed to make rendezvous point",
                 ))
             }
 

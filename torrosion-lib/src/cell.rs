@@ -1006,7 +1006,7 @@ impl EndReason {
             EndReason::Destroy => std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "Circuit destroyed"),
             EndReason::Done => std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "Connection aborted"),
             EndReason::Timeout => std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection timed out"),
-            EndReason::NoRoute => std::io::Error::new(std::io::ErrorKind::HostUnreachable, "No route"),
+            EndReason::NoRoute => std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "No route"),
             EndReason::Hibernating => std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "OR hibernating"),
             EndReason::Internal => std::io::Error::new(std::io::ErrorKind::Other, "Internal error"),
             EndReason::ResourceLimit => std::io::Error::new(std::io::ErrorKind::Other, "Resource limit reached"),
