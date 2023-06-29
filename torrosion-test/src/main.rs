@@ -13,12 +13,39 @@ async fn main() {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
-    let hs_uri = hyper::Uri::from_static("http://5anebu2glyc235wbbop3m2ukzlaptpkq333vdtdvcjpigyb7x2i2m2qd.onion/test.txt");
-    let hs_client = torrosion::hs::http::new_hs_client(client, PRIV_KEY);
+    let a = torrosion::hs::HSAddress::from_str("*.5anebu2glyc235wbbop3m2ukzlaptpkq333vdtdvcjpigyb7x2i2m2qd.onion").unwrap();
+    println!("{:?}", a);
 
-    let res = hs_client.get(hs_uri).await.unwrap();
-    println!("{:?}", res);
+    let (
+        descriptor, first_layer, blinded_key, hs_subcred
+    ) = a.fetch_ds_first_layer(&client).await.unwrap();
+    println!("{:?}", first_layer);
 
-    let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
-    println!("{}", String::from_utf8_lossy(&body));
+    let second_layer = torrosion::hs::HSAddress::get_ds_second_layer(
+        descriptor, first_layer, None, &blinded_key, &hs_subcred
+    ).await.unwrap();
+    println!("{:?}", second_layer.caa);
+
+    // let hs_uri = hyper::Uri::from_static("http://znkiu4wogurrktkqqid2efdg4nvztm7d2jydqenrzeclfgv3byevnbid.onion/test.txt");
+    //
+    // let hs_addr = torrosion::hs::HSAddress::from_uri(&hs_uri).unwrap();
+    //
+    // let (descriptor, first_layer, blinded_key, hs_subcred) =
+    //     hs_addr.fetch_ds_first_layer(&client).await.unwrap();
+    //
+    // println!("{:?}", first_layer.caa_critical);
+    //
+    // let second_layer = torrosion::hs::HSAddress::get_ds_second_layer(
+    //     descriptor, first_layer, None, &blinded_key, &hs_subcred
+    // ).await.unwrap();
+    //
+    // println!("{:?}", second_layer.caa);
+
+    // let hs_client = torrosion::hs::http::new_hs_client(client, PRIV_KEY);
+    //
+    // let res = hs_client.get(hs_uri).await.unwrap();
+    // println!("{:?}", res);
+    //
+    // let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
+    // println!("{}", String::from_utf8_lossy(&body));
 }

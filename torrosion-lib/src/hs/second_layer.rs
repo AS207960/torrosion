@@ -226,7 +226,7 @@ impl IntroductionPointLine {
 pub struct CAA {
     pub flags: u8,
     pub tag: String,
-    pub value: String,
+    pub value: Vec<u8>,
 }
 
 impl CAA {
@@ -242,19 +242,72 @@ impl CAA {
         ))?.to_string();
         let mut value = line.collect::<Vec<_>>().join(" ");
 
-        if value.starts_with(" ") {
-            if !value.ends_with(" ") {
+        let mut value_out = vec![];
+
+        let mut in_quote = false;
+        while !value.is_empty() {
+            let mut n = value.remove(0);
+
+            if n == '"' {
+                in_quote = !in_quote;
+                continue;
+            }
+            if n == ' ' && !in_quote {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput, "Invalid CAA record",
-                ))
+                ));
             }
-            value = value.replace("\\\"", "\"");
+
+            if n == '\\' {
+                if value.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+                    ));
+                }
+                n = value.remove(0);
+                if n.is_ascii_digit() {
+                    if value.len() < 2 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+                        ));
+                    }
+                    let n1 = n;
+                    let n2 = value.remove(0);
+                    let n3 = value.remove(0);
+                    if !n2.is_ascii_digit() || !n3.is_ascii_digit() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+                        ));
+                    }
+                    let n1 = n1 as u8 - b'0';
+                    let n2 = n2 as u8 - b'0';
+                    let n3 = n3 as u8 - b'0';
+                    let v = n1 as u16 * 100 + n2 as u16 * 10 + n3 as u16;
+                    if v > 255 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+                        ));
+                    }
+                    value_out.push(v as u8);
+                    continue;
+                }
+            }
+
+            let l = n.len_utf8();
+            let mut b = vec![0u8; l];
+            n.encode_utf8(&mut b[..]);
+            value_out.extend_from_slice(&b[..]);
+        }
+        if in_quote {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput, "Invalid CAA record",
+            ));
         }
 
         Ok(Self {
             flags,
             tag,
-            value,
+            value: value_out,
         })
     }
 }
