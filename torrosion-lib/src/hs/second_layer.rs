@@ -2,6 +2,7 @@ use base64::prelude::*;
 use byteorder::ReadBytesExt;
 use crate::net_status::{get_all, get_at_most_once, get_exactly_once};
 use std::io::Read;
+use std::str::FromStr;
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -309,5 +310,14 @@ impl CAA {
             tag,
             value: value_out,
         })
+    }
+}
+
+impl FromStr for CAA {
+    type Err = std::io::Error;
+
+    fn from_str(line: &str) -> std::io::Result<Self> {
+        let mut parts = line.trim().split(" ");
+        Self::parse(&mut parts)
     }
 }
