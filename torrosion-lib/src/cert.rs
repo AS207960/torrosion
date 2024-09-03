@@ -188,7 +188,6 @@ impl RsaEd25519CrossCert {
     }
 
     pub fn verify_signature(&self, pkey: &[u8]) -> std::io::Result<()> {
-        use rsa::PublicKey;
         use rsa::pkcs8::DecodePublicKey;
 
         let hash = ring::digest::digest(&ring::digest::SHA256, &self.signed_data);
@@ -196,7 +195,7 @@ impl RsaEd25519CrossCert {
             Ok(key) => key,
             Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid RSA key")),
         };
-        key.verify(rsa::PaddingScheme::new_pkcs1v15_sign_raw(), hash.as_ref(), &self.signature)
+        key.verify(rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(), hash.as_ref(), &self.signature)
             .map_err(|_| std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "invalid signature over RSA->Ed25519 cross-cert"

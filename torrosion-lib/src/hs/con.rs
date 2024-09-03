@@ -213,7 +213,7 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
             }
         }
 
-        let my_sk = x25519_dalek::StaticSecret::new(&mut thread_rng());
+        let my_sk = x25519_dalek::StaticSecret::random_from_rng(&mut thread_rng());
         let my_pk = x25519_dalek::PublicKey::from(&my_sk);
         let b = x25519_dalek::PublicKey::from(intro_point.ntor_enc_key);
         let xb = my_sk.diffie_hellman(&b);

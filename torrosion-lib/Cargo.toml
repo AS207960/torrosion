@@ -1,6 +1,6 @@
 [package]
 name = "torrosion"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 repository = "https://github.com/AS207960/libtor"
 authors = ["Q Misell <q@as207960.net>"]
@@ -13,35 +13,39 @@ exclude = ["/update_fallback.sh"]
 [dependencies]
 hex = "0.4"
 log = "0.4"
-rand = "0.7"
+rand = "0.8"
 regex = "1"
 semver = "1"
 lazy_static = "1"
 chrono = "0.4"
 byteorder = "1"
-ring = "0.16"
+ring = "0.17"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
-tokio-rustls = "0.23"
+tokio-rustls = "0.26"
 tokio-stream = { version = "0.1", features = ["io-util"] }
-x509-parser = "0.14"
-oid-registry = "0.6"
-rsa = "0.7"
+x509-parser = "0.16"
+oid-registry = "0.7"
+rsa = "0.9"
 aes = "0.8"
 ctr = "0.9"
-hyper = { version = "0.14", features = ["client", "http1", "tcp"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1"] }
 futures = "0.3"
-async-compression = { version = "0.3", features = ["tokio", "zlib", "zstd", "xz"] }
-async-native-tls = { version = "0.4", features = ["runtime-tokio"], default-features = false }
-base64 = "0.21"
-base32 = "0.4"
+async-compression = { version = "0.4", features = ["tokio", "zlib", "zstd", "xz"] }
+async-native-tls = { version = "0.5", features = ["runtime-tokio"], default-features = false }
+base64 = "0.22"
+base32 = "0.5"
 sha3 = "0.10"
 curve25519-dalek = "4.0.0-rc.1"
-ed25519-dalek = "1"
-x25519-dalek = "1"
+ed25519-dalek = "2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12"
 sha2 = "0.10"
-http = "0.2"
+http = "1"
 digest = "0.10.6"
 sha1 = "0.10.5"
 async-trait = "0.1.66"
+tower = "0.5.0"
+http-body-util = "0.1.2"
+bytes = "1.7.1"

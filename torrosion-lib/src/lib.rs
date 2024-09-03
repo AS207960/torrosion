@@ -19,7 +19,6 @@ use std::fmt::Formatter;
 use std::ops::Deref;
 use rand::prelude::*;
 use futures::StreamExt;
-use rsa::PublicKey;
 use auth::RsaIdentity;
 
 static PAYLOAD_LEN: usize = 509;
@@ -238,7 +237,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                             let half_interval = ((c.fresh_until - c.valid_after) / 2).num_seconds();
                             let unfresh_s = std::cmp::max((chrono::Utc::now() - c.fresh_until).num_seconds(), 0);
                             let max_delay = std::cmp::max(half_interval - unfresh_s, 0);
-                            rng.gen_range(0, max_delay+1) as u64
+                            rng.gen_range(0..=max_delay) as u64
                         };
                         tokio::time::sleep(std::time::Duration::from_secs(delay_s)).await;
 
@@ -443,7 +442,7 @@ fn verify_consensus(
         }
 
         match auth.signing_key_rsa().unwrap().verify(
-            rsa::PaddingScheme::new_pkcs1v15_sign_raw(), consensus.digest.as_ref(), &sig.signature
+            rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(), consensus.digest.as_ref(), &sig.signature
         ) {
             Ok(_) => {
                 num_valid_signatures += 1;

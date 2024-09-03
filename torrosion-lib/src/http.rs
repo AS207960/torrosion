@@ -1,19 +1,17 @@
 use futures::FutureExt;
+use http_body_util::BodyExt;
 
 #[derive(Clone)]
 pub(crate) struct HyperDirectoryConnector {
     circuit: crate::circuit::Circuit,
 }
 
-impl hyper::service::Service<hyper::Uri> for HyperDirectoryConnector {
+impl tower::Service<hyper::Uri> for HyperDirectoryConnector {
     type Response = crate::stream::Stream;
     type Error = std::io::Error;
     type Future = futures::future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>
-    ) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         std::task::Poll::Ready(Ok(()))
     }
 
@@ -25,7 +23,7 @@ impl hyper::service::Service<hyper::Uri> for HyperDirectoryConnector {
     }
 }
 
-struct HyperBodyImplStream(hyper::Body);
+struct HyperBodyImplStream(http_body_util::BodyDataStream<hyper::body::Incoming>);
 
 impl futures::Stream for HyperBodyImplStream {
     type Item = std::io::Result<hyper::body::Bytes>;
@@ -34,18 +32,19 @@ impl futures::Stream for HyperBodyImplStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>
     ) -> std::task::Poll<Option<Self::Item>> {
-        use hyper::body::HttpBody;
-        std::pin::Pin::new(&mut self.0).poll_data(cx).map(|opt| {
-            opt.map(|res| res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+        std::pin::Pin::new(&mut self.0).poll_next(cx).map(|opt| {
+            opt.map(|res| {
+                res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            })
         })
     }
 }
 
 #[derive(Debug)]
-pub struct HyperResponse(hyper::Response<hyper::Body>);
+pub struct HyperResponse(hyper::Response<hyper::body::Incoming>);
 
 impl std::ops::Deref for HyperResponse {
-    type Target = hyper::Response<hyper::Body>;
+    type Target = hyper::Response<hyper::body::Incoming>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -53,7 +52,7 @@ impl std::ops::Deref for HyperResponse {
 }
 
 impl HyperResponse {
-    pub fn new(resp: hyper::Response<hyper::Body>) -> HyperResponse {
+    pub fn new(resp: hyper::Response<hyper::body::Incoming>) -> HyperResponse {
         HyperResponse(resp)
     }
 
@@ -68,7 +67,9 @@ impl HyperResponse {
             None => None,
         };
 
-        let body = tokio_util::io::StreamReader::new(HyperBodyImplStream(self.0.into_body()));
+        let body = tokio_util::io::StreamReader::new(
+            HyperBodyImplStream(self.0.into_body().into_data_stream())
+        );
 
         Ok(match content_encoding.as_deref() {
             None | Some("identity") => Box::new(body),
@@ -94,10 +95,11 @@ impl HyperResponse {
     }
 }
 
-pub(crate) fn new_directory_client(circ: crate::circuit::Circuit) -> hyper::client::Client<HyperDirectoryConnector, hyper::Body> {
-    hyper::client::Client::builder()
+pub(crate) fn new_directory_client(circ: crate::circuit::Circuit) -> hyper_util::client::legacy::Client<
+    HyperDirectoryConnector, http_body_util::Full<bytes::Bytes>> {
+    hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .set_host(false)
-        .build::<_, hyper::Body>(HyperDirectoryConnector {
+        .build::<_, http_body_util::Full<bytes::Bytes>>(HyperDirectoryConnector {
             circuit: circ
         })
 }

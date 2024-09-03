@@ -237,9 +237,9 @@ impl Stream {
     }
 }
 
-impl hyper::client::connect::Connection for Stream {
-    fn connected(&self) -> hyper::client::connect::Connected {
-        hyper::client::connect::Connected::new()
+impl hyper_util::client::legacy::connect::Connection for Stream {
+    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        hyper_util::client::legacy::connect::Connected::new()
             .proxy(false)
     }
 }
@@ -328,5 +328,63 @@ impl tokio::io::AsyncWrite for Stream {
             ))
         }
         std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl hyper::rt::Read for Stream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        mut buf: hyper::rt::ReadBufCursor
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if !self.read_buf.is_empty() {
+            unsafe {
+                let _buf = buf.as_mut();
+                let amt = std::cmp::min(self.read_buf.len(), _buf.len());
+                std::ptr::copy_nonoverlapping(self.read_buf.as_ptr(), _buf.as_mut_ptr().cast::<u8>(), amt);
+                buf.advance(amt);
+                self.read_buf.drain(..amt);
+                return std::task::Poll::Ready(Ok(()));
+            }
+        }
+
+        let data = match self.data_rx.poll_recv(cx) {
+            std::task::Poll::Pending => return std::task::Poll::Pending,
+            std::task::Poll::Ready(None) => return std::task::Poll::Ready(Ok(())),
+            std::task::Poll::Ready(Some(data)) => data,
+        };
+        unsafe {
+            let _buf = buf.as_mut();
+            let amt = std::cmp::min(data.len(), _buf.len());
+            let (a, b) = data.split_at(amt);
+            std::ptr::copy_nonoverlapping(a.as_ptr(), _buf.as_mut_ptr().cast::<u8>(), amt);
+            buf.advance(amt);
+            self.read_buf.extend_from_slice(b);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+}
+
+impl hyper::rt::Write for Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8]
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        tokio::io::AsyncWrite::poll_write(self, cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(self, cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(self, cx)
     }
 }

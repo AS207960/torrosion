@@ -1,7 +1,6 @@
 use std::ops::Deref;
 use base64::prelude::*;
 use ring::signature::VerificationAlgorithm;
-use rsa::PublicKey;
 use x509_parser::prelude::FromDer;
 
 async fn parse_server_descriptor<S: crate::storage::Storage + Send + Sync + 'static>(
@@ -180,7 +179,7 @@ impl Descriptor {
             Err(_) => return false,
         };
         if identity_key.verify(
-            rsa::PaddingScheme::new_pkcs1v15_sign_raw(), self.rsa_hash.as_ref(), &self.rsa_signature
+            rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(), self.rsa_hash.as_ref(), &self.rsa_signature
         ).is_err() {
             return false;
         }
@@ -200,7 +199,7 @@ impl Descriptor {
             Err(_) => return false,
         };
         if onion_key.verify(
-            rsa::PaddingScheme::new_pkcs1v15_sign_raw(), &onion_key_crosscert_sig_data, &self.onion_key_crosscert
+            rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(), &onion_key_crosscert_sig_data, &self.onion_key_crosscert
         ).is_err() {
             return false;
         }
@@ -466,7 +465,7 @@ impl Line {
                     let date_time = chrono::NaiveDateTime::parse_from_str(&format!("{} {}", date, time), "%Y-%m-%d %H:%M:%S").map_err(|_| std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid published line",
                     ))?;
-                    Self::Published(chrono::DateTime::from_utc(date_time, chrono::Utc))
+                    Self::Published(chrono::DateTime::from_naive_utc_and_offset(date_time, chrono::Utc))
                 }
                 "fingerprint" => {
                     let fingerprint = (0..10).map(|_| Ok::<_, std::io::Error>(parts.next().ok_or(std::io::Error::new(
@@ -563,7 +562,7 @@ impl Line {
                     let date_time = chrono::NaiveDateTime::parse_from_str(&format!("{} {}", date, time), "%Y-%m-%d %H:%M:%S").map_err(|_| std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid overload-general line",
                     ))?;
-                    Self::Overload(chrono::DateTime::from_utc(date_time, chrono::Utc))
+                    Self::Overload(chrono::DateTime::from_naive_utc_and_offset(date_time, chrono::Utc))
                 }
                 "contact" => {
                     Self::Contact(parts.collect::<Vec<_>>().join(" "))

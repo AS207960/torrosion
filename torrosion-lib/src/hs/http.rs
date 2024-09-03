@@ -14,15 +14,12 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> Clone for HyperHSConnec
     }
 }
 
-impl<S: crate::storage::Storage + Send + Sync + 'static> hyper::service::Service<hyper::Uri> for HyperHSConnector<S> {
+impl<S: crate::storage::Storage + Send + Sync + 'static> tower::Service<hyper::Uri> for HyperHSConnector<S> {
     type Response = crate::stream::Stream;
     type Error = std::io::Error;
     type Future = futures::future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>
-    ) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         std::task::Poll::Ready(Ok(()))
     }
 
@@ -58,10 +55,10 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> hyper::service::Service
 
 pub fn new_hs_client<S: crate::storage::Storage + Send + Sync + 'static, P: Into<Option<[u8; 32]>>>(
     client: crate::Client<S>, priv_key: P
-) -> hyper::client::Client<HyperHSConnector<S>, hyper::Body> {
-    hyper::client::Client::builder()
+) -> hyper_util::client::legacy::Client<HyperHSConnector<S>, http_body_util::Full<bytes::Bytes>> {
+    hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .set_host(true)
-        .build::<_, hyper::Body>(HyperHSConnector {
+        .build::<_, http_body_util::Full<bytes::Bytes>>(HyperHSConnector {
             client,
             priv_key: priv_key.into(),
         })

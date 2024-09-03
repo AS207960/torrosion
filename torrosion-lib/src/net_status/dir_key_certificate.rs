@@ -1,4 +1,3 @@
-use rsa::PublicKey;
 use x509_parser::prelude::FromDer;
 
 #[derive(Debug)]
@@ -59,12 +58,12 @@ impl DirectoryKeyCertificate {
         };
 
         let hash = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &self.identity_key);
-        match signing_key.verify(rsa::PaddingScheme::new_pkcs1v15_sign_raw(), hash.as_ref(), &self.cross_cert) {
+        match signing_key.verify(rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(), hash.as_ref(), &self.cross_cert) {
             Ok(_) => (),
             Err(_) => return false
         }
 
-        match identity_key.verify(rsa::PaddingScheme::new_pkcs1v15_sign_raw(), self.digest.as_ref(), &self.certification) {
+        match identity_key.verify(rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(), self.digest.as_ref(), &self.certification) {
             Ok(_) => (),
             Err(_) => return false
         }
@@ -219,7 +218,7 @@ impl Part {
                     let date_time = chrono::NaiveDateTime::parse_from_str(&format!("{} {}", date, time), "%Y-%m-%d %H:%M:%S").map_err(|_| std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid directory key certificate"
                     ))?;
-                    Self::DirectoryKeyPublished(chrono::DateTime::from_utc(date_time, chrono::Utc))
+                    Self::DirectoryKeyPublished(chrono::DateTime::from_naive_utc_and_offset(date_time, chrono::Utc))
                 },
                 "dir-key-expires" => {
                     let date = parts.next().ok_or(std::io::Error::new(
@@ -231,7 +230,7 @@ impl Part {
                     let date_time = chrono::NaiveDateTime::parse_from_str(&format!("{} {}", date, time), "%Y-%m-%d %H:%M:%S").map_err(|_| std::io::Error::new(
                         std::io::ErrorKind::InvalidInput, "Invalid directory key certificate"
                     ))?;
-                    Self::DirectoryKeyExpires(chrono::DateTime::from_utc(date_time, chrono::Utc))
+                    Self::DirectoryKeyExpires(chrono::DateTime::from_naive_utc_and_offset(date_time, chrono::Utc))
                 },
                 "dir-signing-key" => {
                     let cert = super::read_pem(reader).await.map_err(|_| std::io::Error::new(

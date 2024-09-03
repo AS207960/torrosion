@@ -41,7 +41,7 @@ impl HSAddress {
             None => host,
         };
 
-        let addr = base32::decode(base32::Alphabet::RFC4648 { padding: false }, addr)
+        let addr = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, addr)
             .ok_or_else(|| std::io::Error::new(
                 std::io::ErrorKind::InvalidInput, "Invalid onion address"
             ))?;

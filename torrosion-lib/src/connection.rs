@@ -564,14 +564,14 @@ impl ConnectionRouter {
         let mut rng = thread_rng();
         loop {
             let circuit_id = if self.protocol_version >= 4 {
-                let r = rng.gen_range(1, u32::MAX >> 1);
+                let r = rng.gen_range(1..u32::MAX >> 1);
                 if self.initiated {
                     r | 1 << 31
                 } else {
                     r
                 }
             } else {
-                rng.gen_range(1, u16::MAX as u32)
+                rng.gen_range(1..u16::MAX as u32)
             };
             if !self.circuits.contains(&circuit_id) {
                 self.circuits.insert(circuit_id);
@@ -674,7 +674,7 @@ impl Connection {
     }
 
     pub(super) fn ntor_client_1(identity: crate::RsaIdentity, ntor_onion_key: [u8; 32]) -> (Vec<u8>, NtorClientState) {
-        let my_sk = x25519_dalek::StaticSecret::new(&mut thread_rng());
+        let my_sk = x25519_dalek::StaticSecret::random_from_rng(&mut thread_rng());
         let my_pk = x25519_dalek::PublicKey::from(&my_sk);
 
         let mut data = vec![];

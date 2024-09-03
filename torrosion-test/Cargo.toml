@@ -10,5 +10,5 @@ license = "MIT"
 [dependencies]
 torrosion = { path = "../torrosion-lib" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "fs"] }
-hyper = { version = "0.14", features = ["client", "http1", "tcp"] }
-pretty_env_logger = "0.4"
+hyper = { version = "1", features = ["client", "http1"] }
+pretty_env_logger = "0.5"

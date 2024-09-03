@@ -3,3 +3,4 @@ members = [
     "torrosion-lib",
     "torrosion-test"
 ]
+resolver = "2"

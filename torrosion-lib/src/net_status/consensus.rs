@@ -270,7 +270,7 @@ impl Timestamp {
         let time = NaiveTime::parse_from_str(time, "%H:%M:%S").map_err(|_| std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Invalid timestamp"
         ))?;
-        let datetime = DateTime::from_utc(date.and_time(time), Utc);
+        let datetime = DateTime::from_naive_utc_and_offset(date.and_time(time), Utc);
         Ok(Self(datetime))
     }
 }

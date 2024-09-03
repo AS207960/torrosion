@@ -393,7 +393,7 @@ impl InnerCircuit {
     fn select_stream_id(&mut self) -> u16 {
         let mut rng = thread_rng();
         loop {
-            let stream_id = rng.gen_range(1, u16::MAX);
+            let stream_id = rng.gen_range(1..u16::MAX);
             if !self.streams.contains(&stream_id) {
                 self.streams.insert(stream_id);
                 return stream_id;
