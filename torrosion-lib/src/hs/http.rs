@@ -27,7 +27,13 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> tower::Service<hyper::U
         let client = self.client.clone();
         let priv_key = self.priv_key;
         async move {
-            let hs_address = super::HSAddress::from_uri(&req)?;
+            let hs_address = match super::HSAddress::from_uri(&req) {
+                Ok(a) => a,
+                Err(e) => {
+                    trace!("Failed to parse hidden service address: {}", e);
+                    return Err(e.into());
+                }
+            };
 
             let scheme = match req.scheme() {
                 Some(s) => s,
@@ -44,8 +50,20 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> tower::Service<hyper::U
             };
             let port = authority.port_u16().unwrap_or(default_port);
 
-            let (ds, subcred) = hs_address.fetch_ds(&client,priv_key).await?;
-            let hs_circ = super::con::connect(&client, &ds, &subcred).await?;
+            let (ds, subcred) = match hs_address.fetch_ds(&client,priv_key).await {
+                Ok(a) => a,
+                Err(e) => {
+                    trace!("Failed to download hidden service directory: {}", e);
+                    return Err(e.into());
+                }
+            };
+            let hs_circ = match super::con::connect(&client, &ds, &subcred).await {
+                Ok(a) => a,
+                Err(e) => {
+                    trace!("Failed to connect to hidden service: {}", e);
+                    return Err(e.into());
+                }
+            };
 
             let con_to = format!("{}:{}", authority.host(), port);
             hs_circ.relay_begin(&con_to, None).await
