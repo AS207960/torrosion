@@ -67,13 +67,14 @@ impl Authority {
 
 pub(crate) fn default_authorities() -> Vec<Authority> {
     vec![
-        Authority::new("bastet", "27102BC123E7AF1D4741AE047E160C91ADC76B21"),
-        Authority::new("dannenberg", "0232AF901C31A04EE9848595AF9BB7620D4C5B2E"),
+        Authority::new("moria1", "F533C81CEF0BC0267857C99B2F471ADF249FA232"),
+        Authority::new("tor26", "2F3DF9CA0E5D36F2685A2DA67184EB8DCB8CBA8C"),
         Authority::new("dizum", "E8A9C45EDE6D711294FADF8E7951F4DE6CA56B58"),
         Authority::new("gabelmoo", "ED03BB616EB2F60BEC80151114BB25CEF515B226"),
-        Authority::new("longclaw", "23D15D965BC35114467363C165C4F724B64B4F66"),
+        Authority::new("dannenberg", "0232AF901C31A04EE9848595AF9BB7620D4C5B2E"),
         Authority::new("maatuska", "49015F787433103580E3B66A1707A00E60F2D15B"),
-        Authority::new("moria1", "F533C81CEF0BC0267857C99B2F471ADF249FA232"),
-        Authority::new("tor26", "14C131DFC5C6F93646BE72FA1401C02A8DF2E8B4"),
+        Authority::new("longclaw", "23D15D965BC35114467363C165C4F724B64B4F66"),
+        Authority::new("bastet", "27102BC123E7AF1D4741AE047E160C91ADC76B21"),
+        Authority::new("faravahar", "70849B868D606BAECFB6128C5E3D782029AA394F"),
     ]
 }
