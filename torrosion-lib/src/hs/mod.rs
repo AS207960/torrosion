@@ -37,11 +37,11 @@ impl HSAddress {
             ));
         }
         let addr = match host.rsplit_once(".") {
-            Some(h) => h.1,
-            None => host,
+            Some(h) => h.1.to_ascii_lowercase(),
+            None => host.to_ascii_lowercase(),
         };
 
-        let addr = base32::decode(base32::Alphabet::Rfc4648 { padding: false }, addr)
+        let addr = base32::decode(base32::Alphabet::Rfc4648Lower { padding: false }, &addr)
             .ok_or_else(|| std::io::Error::new(
                 std::io::ErrorKind::InvalidInput, "Invalid onion address"
             ))?;
@@ -574,12 +574,14 @@ fn shared_random_value(consensus: &crate::net_status::consensus::Consensus) -> [
 }
 
 mod test {
+    use chrono::TimeZone;
+
     #[test]
     fn test_tp() {
         let mock_consensus = crate::net_status::consensus::Consensus {
-            valid_after: Utc.with_ymd_and_hms(2016, 04, 13, 11, 0, 0).unwrap(),
-            fresh_until: Utc.with_ymd_and_hms(2016, 04, 13, 12, 0, 0).unwrap(),
-            valid_until: Utc.with_ymd_and_hms(2016, 04, 13, 17, 0, 0).unwrap(),
+            valid_after: chrono::Utc.with_ymd_and_hms(2016, 04, 13, 11, 0, 0).unwrap(),
+            fresh_until: chrono::Utc.with_ymd_and_hms(2016, 04, 13, 12, 0, 0).unwrap(),
+            valid_until: chrono::Utc.with_ymd_and_hms(2016, 04, 13, 17, 0, 0).unwrap(),
             voting_delay: crate::net_status::consensus::VotingDelay { vote_seconds: 0, dist_seconds: 0 },
             client_versions: vec![],
             server_versions: vec![],
@@ -602,5 +604,10 @@ mod test {
         let time_period_length = super::time_period_length_minutes(&mock_consensus);
         assert_eq!(current_time_period, 16903);
         assert_eq!(time_period_length, 1440);
+    }
+
+    #[test]
+    fn test_hs_parsing() {
+        super::HSAddress::from_str("5anebu2glyc235wbbop3m2ukzlaptpkq333vdtdvcjpigyb7x2i2m2qd.onion").unwrap();
     }
 }
