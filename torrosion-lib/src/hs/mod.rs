@@ -165,7 +165,7 @@ impl HSAddress {
         hs_relays: &HSRelays, blinded_key: &[u8; 32]
     ) -> std::io::Result<descriptor::Descriptor> {
         let mut candidates = Self::candidates(&consensus, hs_relays, &blinded_key);
-        candidates.shuffle(&mut thread_rng());
+        candidates.shuffle(&mut rand::rng());
 
         let mut r = 0;
         let (mut con, first_router_descriptor) = loop {
@@ -363,7 +363,7 @@ impl HSAddress {
         sha3::Digest::update(&mut mac_hasher, &encrypted);
         let d_mac = mac_hasher.finalize().to_vec();
 
-        if ring::constant_time::verify_slices_are_equal(&d_mac, mac).is_err() {
+        if !constant_time_eq::constant_time_eq(&d_mac, mac) {
             return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid encrypted data"));
         }
 
@@ -574,6 +574,7 @@ fn shared_random_value(consensus: &crate::net_status::consensus::Consensus) -> [
 }
 
 mod test {
+    #[test]
     use chrono::TimeZone;
 
     #[test]

@@ -120,6 +120,7 @@ pub(crate) struct Descriptor {
     rsa_signature: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum ExitPolicy {
     Accept(ExitPattern),
@@ -172,8 +173,8 @@ impl Descriptor {
             Err(_) => return false,
         };
         let identity_key = match rsa::RsaPublicKey::new(
-            rsa::BigUint::from_bytes_be(identity_key.modulus),
-            rsa::BigUint::from_bytes_be(identity_key.exponent)
+            rsa::BoxedUint::from_be_slice_vartime(identity_key.modulus),
+            rsa::BoxedUint::from_be_slice_vartime(identity_key.exponent)
         ) {
             Ok(k) => k,
             Err(_) => return false,
@@ -192,8 +193,8 @@ impl Descriptor {
             Err(_) => return false,
         };
         let onion_key = match rsa::RsaPublicKey::new(
-            rsa::BigUint::from_bytes_be(onion_key.modulus),
-            rsa::BigUint::from_bytes_be(onion_key.exponent)
+            rsa::BoxedUint::from_be_slice_vartime(onion_key.modulus),
+            rsa::BoxedUint::from_be_slice_vartime(onion_key.exponent)
         ) {
             Ok(k) => k,
             Err(_) => return false,

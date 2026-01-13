@@ -131,14 +131,16 @@ impl IntroductionPoint {
         let onion_keys = get_all!(line, IntroductionPointLine::OnionKey);
         let enc_keys = get_all!(line, IntroductionPointLine::EncryptionKey);
 
-        let ntor_onion_key = TryInto::<[u8; 32]>::try_into(onion_keys.iter().find(|(k, _)| k == "ntor").ok_or(std::io::Error::new(
+        let ntor_onion_key: Vec<u8> = onion_keys.into_iter().find(|(k, _)| k == "ntor").ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Invalid introduction point",
-        ))?.1.as_ref()).map_err(|_| std::io::Error::new(
+        ))?.1;
+        let ntor_onion_key = <[u8; 32]>::try_from(ntor_onion_key.as_slice()).map_err(|_| std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Invalid introduction point",
         ))?;
-        let ntor_enc_key = TryInto::<[u8; 32]>::try_into(enc_keys.iter().find(|(k, _)| k == "ntor").ok_or(std::io::Error::new(
+        let ntor_enc_key: Vec<u8> = enc_keys.into_iter().find(|(k, _)| k == "ntor").ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Invalid introduction point",
-        ))?.1.as_ref()).map_err(|_| std::io::Error::new(
+        ))?.1;
+        let ntor_enc_key = <[u8; 32]>::try_from(ntor_enc_key.as_slice()).map_err(|_| std::io::Error::new(
             std::io::ErrorKind::InvalidInput, "Invalid introduction point",
         ))?;
 

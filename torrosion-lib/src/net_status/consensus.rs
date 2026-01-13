@@ -156,6 +156,7 @@ impl NetworkStatusVersion {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum Preamble {
     VoteStatus(VoteStatus),
@@ -238,6 +239,7 @@ impl VoteStatus {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct ConsensusMethod(usize);
 
@@ -698,6 +700,7 @@ impl Router {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum RouterItem {
     Address(RouterAddress),
@@ -738,6 +741,7 @@ impl RouterItem {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct RouterAddress(std::net::SocketAddr);
 
@@ -767,6 +771,7 @@ impl RouterStatus {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum RouterVersion {
     Tor(String),

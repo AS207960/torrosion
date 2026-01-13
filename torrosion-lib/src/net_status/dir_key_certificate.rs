@@ -2,6 +2,7 @@ use x509_parser::prelude::FromDer;
 
 #[derive(Debug)]
 pub struct DirectoryKeyCertificate {
+    #[allow(dead_code)]
     pub directory_address: Option<std::net::SocketAddr>,
     pub fingerprint: crate::RsaIdentity,
     pub identity_key: Vec<u8>,
@@ -77,8 +78,8 @@ impl DirectoryKeyCertificate {
             Err(_) => return None
         };
         match rsa::RsaPublicKey::new(
-            rsa::BigUint::from_bytes_be(key.modulus),
-            rsa::BigUint::from_bytes_be(key.exponent)
+            rsa::BoxedUint::from_be_slice_vartime(key.modulus),
+            rsa::BoxedUint::from_be_slice_vartime(key.exponent)
         ) {
             Ok(k) => Some(k),
             Err(_) => None,
@@ -91,8 +92,8 @@ impl DirectoryKeyCertificate {
             Err(_) => return None
         };
         match rsa::RsaPublicKey::new(
-            rsa::BigUint::from_bytes_be(key.modulus),
-            rsa::BigUint::from_bytes_be(key.exponent)
+            rsa::BoxedUint::from_be_slice_vartime(key.modulus),
+            rsa::BoxedUint::from_be_slice_vartime(key.exponent)
         ) {
             Ok(k) => Some(k),
             Err(_) => None,

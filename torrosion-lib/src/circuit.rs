@@ -122,7 +122,7 @@ struct Aes128 {
 }
 
 impl Aes128 {
-    fn new(key: &[u8], iv: &[u8]) -> Self {
+    fn new(key: &[u8; 16], iv: &[u8; 16]) -> Self {
         Self {
             crypter: crate::Aes128::new(key.into(), iv.into())
         }
@@ -140,7 +140,7 @@ struct Aes256 {
 }
 
 impl Aes256 {
-    fn new(key: &[u8], iv: &[u8]) -> Self {
+    fn new(key: &[u8; 32], iv: &[u8; 16]) -> Self {
         Self {
             crypter: crate::Aes256::new(key.into(), iv.into())
         }
@@ -391,9 +391,9 @@ impl InnerCircuit {
     }
 
     fn select_stream_id(&mut self) -> u16 {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         loop {
-            let stream_id = rng.gen_range(1..u16::MAX);
+            let stream_id = rng.random_range(1..u16::MAX);
             if !self.streams.contains(&stream_id) {
                 self.streams.insert(stream_id);
                 return stream_id;
@@ -464,9 +464,9 @@ impl InnerCircuit {
             padding.push(0);
         }
         if padding_len > 4 {
-            let mut rng = thread_rng();
+            let mut rng = rand::rng();
             for _ in 0..(padding_len - 4) {
-                padding.push(rng.gen());
+                padding.push(rng.random());
             }
         }
         payload_bytes_no_digest.extend(&padding);

@@ -209,7 +209,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                         // We have no stored consensus
                         let fallback_dirs = fallback::FallbackDirs::new();
                         let fallback = {
-                            let mut rng = thread_rng();
+                            let mut rng = rand::rng();
                             fallback_dirs.fallbacks.choose(&mut rng).unwrap()
                         };
                         info!("Using fallback {} for consensus", fallback.id);
@@ -233,11 +233,11 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                     }
                     Some(c) => {
                         let delay_s = {
-                            let mut rng = thread_rng();
+                            let mut rng = rand::rng();
                             let half_interval = ((c.fresh_until - c.valid_after) / 2).num_seconds();
                             let unfresh_s = std::cmp::max((chrono::Utc::now() - c.fresh_until).num_seconds(), 0);
                             let max_delay = std::cmp::max(half_interval - unfresh_s, 0);
-                            rng.gen_range(0..=max_delay) as u64
+                            rng.random_range(0..=max_delay) as u64
                         };
                         tokio::time::sleep(std::time::Duration::from_secs(delay_s)).await;
 

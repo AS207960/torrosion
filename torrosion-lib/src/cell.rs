@@ -601,6 +601,7 @@ pub enum AuthMethod {
     Ed25519Sha256Rfc5705 = 3,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AuthChallenge {
     pub challenge: [u8; 32],
@@ -668,10 +669,12 @@ pub enum ClientHandshake {
     Ntor(NtorClientHandshake)
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum ServerHandshake {
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct TapClientHandshake {
     pub server_id: crate::RsaIdentity,
@@ -679,6 +682,7 @@ pub struct TapClientHandshake {
     pub client_kp: Vec<u8>
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct NtorClientHandshake {
     pub server_id: crate::RsaIdentity,
@@ -921,6 +925,7 @@ impl RelayBegin {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RelayConnected {
     pub address: Option<std::net::IpAddr>,
@@ -970,6 +975,7 @@ impl RelayConnected {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RelayEnd {
     pub reason: EndReason,
@@ -1376,6 +1382,7 @@ impl RelayRendezvous2 {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RelayIntroduceAck {
     pub status: RelayIntroduceAckStatus,
@@ -1391,6 +1398,7 @@ pub enum RelayIntroduceAckStatus {
     Unrecognized(u16)
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RelayIntroduceAckExtension {
     Unrecognized(u8, Vec<u8>)

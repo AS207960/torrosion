@@ -2,6 +2,7 @@ use std::io::Read;
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::prelude::*;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Cert {
     signed_data: Vec<u8>,
@@ -137,7 +138,7 @@ impl Cert {
         for ext in &self.extensions {
             match &ext.extension_type {
                 CertExtensionType::SignedWithEd25519Key(signed_with_key) => {
-                    if ring::constant_time::verify_slices_are_equal(signed_with_key, pkey).is_err() {
+                    if !constant_time_eq::constant_time_eq(signed_with_key, pkey) {
                         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid signature"));
                     }
                 },

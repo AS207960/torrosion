@@ -295,7 +295,7 @@ impl InnerConnection {
                 let conn_cert_digest = ring::digest::digest(&ring::digest::SHA256, &conn_cert_der);
                 match &tls_link_cert.key_type {
                     cert::KeyType::X509Sha256(key_digest) => {
-                        if ring::constant_time::verify_slices_are_equal(conn_cert_digest.as_ref(), key_digest).is_err() {
+                        if !constant_time_eq::constant_time_eq(conn_cert_digest.as_ref(), key_digest) {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,
                                 "TLS link certificate is not over certificate used to authenticate TLS connection"
@@ -561,17 +561,17 @@ impl ConnectionRouter {
     }
 
     fn select_circuit_id(&mut self) -> u32 {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         loop {
             let circuit_id = if self.protocol_version >= 4 {
-                let r = rng.gen_range(1..u32::MAX >> 1);
+                let r = rng.random_range(1..u32::MAX >> 1);
                 if self.initiated {
                     r | 1 << 31
                 } else {
                     r
                 }
             } else {
-                rng.gen_range(1..u16::MAX as u32)
+                rng.random_range(1..u16::MAX as u32)
             };
             if !self.circuits.contains(&circuit_id) {
                 self.circuits.insert(circuit_id);
@@ -674,7 +674,7 @@ impl Connection {
     }
 
     pub(super) fn ntor_client_1(identity: crate::RsaIdentity, ntor_onion_key: [u8; 32]) -> (Vec<u8>, NtorClientState) {
-        let my_sk = x25519_dalek::StaticSecret::random_from_rng(&mut thread_rng());
+        let my_sk = x25519_dalek::StaticSecret::random_from_rng(&mut rand::rng());
         let my_pk = x25519_dalek::PublicKey::from(&my_sk);
 
         let mut data = vec![];
@@ -724,7 +724,7 @@ impl Connection {
         auth_input.extend(b"Server");
         let auth = ring::hmac::sign(&t_mac, &auth_input);
 
-        if ring::constant_time::verify_slices_are_equal(auth.as_ref(), &auth_s).is_err() {
+        if !constant_time_eq::constant_time_eq(auth.as_ref(), &auth_s) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other, "KDF mismatch",
             ));
@@ -800,7 +800,7 @@ impl Connection {
 
         let x = {
             let mut x = [0u8; 20];
-            let mut rng = thread_rng();
+            let mut rng = rand::rng();
             rng.fill_bytes(&mut x);
             x
         };

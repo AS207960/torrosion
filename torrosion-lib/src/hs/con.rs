@@ -93,7 +93,7 @@ async fn make_rendezvous_point<S: crate::storage::Storage + Send + Sync + 'stati
     client: &crate::Client<S>, consensus: &crate::net_status::consensus::Consensus
 ) -> std::io::Result<(crate::circuit::Circuit, IntroductionInner)> {
     let mut cookie = [0; 20];
-    thread_rng().fill_bytes(&mut cookie);
+    rand::rng().fill_bytes(&mut cookie);
 
     let rend_router = crate::net_status::select_rendezvous_server(consensus).unwrap();
     let rend_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
@@ -213,7 +213,7 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
             }
         }
 
-        let my_sk = x25519_dalek::StaticSecret::random_from_rng(&mut thread_rng());
+        let my_sk = x25519_dalek::StaticSecret::random_from_rng(&mut rand::rng());
         let my_pk = x25519_dalek::PublicKey::from(&my_sk);
         let b = x25519_dalek::PublicKey::from(intro_point.ntor_enc_key);
         let xb = my_sk.diffie_hellman(&b);
@@ -297,7 +297,7 @@ pub async fn connect<S: crate::storage::Storage + Send + Sync + 'static>(
 
     let consensus = client.consensus().await?;
     let mut intro_points = descriptor.intro_points.clone();
-    intro_points.shuffle(&mut thread_rng());
+    intro_points.shuffle(&mut rand::rng());
 
     let mut r = 0;
     let (rend_circ, introduction_inner) = loop {
@@ -355,7 +355,7 @@ pub async fn connect<S: crate::storage::Storage + Send + Sync + 'static>(
 
     let auth_input_mac = hs_ntor_mac(&auth_input, b"tor-hs-ntor-curve25519-sha3-256-1:hs_mac");
 
-    if ring::constant_time::verify_slices_are_equal(&auth_input_mac, &rend2.auth).is_err() {
+    if !constant_time_eq::constant_time_eq(&auth_input_mac, &rend2.auth) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData, "Invalid rendezvous MAC",
         ))

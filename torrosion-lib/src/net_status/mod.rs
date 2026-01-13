@@ -234,7 +234,7 @@ pub async fn read_pem(r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem::Pe
 }
 
 pub(crate) fn select_directory_server(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut servers = consensus.routers.iter().filter(|r| {
         r.status.iter().any(|f| f == "V2Dir")
     }).filter(|r| {
@@ -247,7 +247,7 @@ pub(crate) fn select_directory_server(consensus: &consensus::Consensus) -> Optio
 }
 
 pub(crate) fn select_rendezvous_server(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut servers = consensus.routers.iter().filter(|r| {
         r.status.iter().any(|f| f == "V2Dir")
     }).filter(|r| {
@@ -263,7 +263,7 @@ pub(crate) fn select_rendezvous_server(consensus: &consensus::Consensus) -> Opti
 }
 
 pub(crate) fn select_node(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut servers = consensus.routers.iter().filter(|r| {
         r.status.iter().any(|f| f == "Running")
     }).filter(|r| {
