@@ -1,6 +1,7 @@
 use crate::cell;
 
 pub struct Stream {
+    pub(crate) remote_ip: Option<StreamIp>,
     stream_id: u16,
     pub(crate) circuit_end: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub(crate) command_tx: tokio_util::sync::PollSender<StreamCommand>,
@@ -10,6 +11,11 @@ pub struct Stream {
     read_buf: Vec<u8>,
     end_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
     close_reason: std::sync::Arc<std::sync::atomic::AtomicU8>
+}
+
+pub struct StreamIp {
+    pub ip: std::net::IpAddr,
+    pub ttl: u32,
 }
 
 #[derive(Debug)]
@@ -40,6 +46,7 @@ impl Stream {
         );
 
         Stream {
+            remote_ip: None,
             stream_id,
             circuit_end,
             command_tx: tokio_util::sync::PollSender::new(command_tx),
@@ -171,6 +178,10 @@ impl Stream {
 
     pub fn get_stream_id(&self) -> u16 {
         self.stream_id
+    }
+
+    pub fn get_remote_ip(&self) -> Option<&StreamIp> {
+        self.remote_ip.as_ref()
     }
 
     pub(crate) async fn recv_command(&mut self) -> std::io::Result<StreamCommand> {
@@ -382,6 +393,52 @@ impl hyper::rt::Write for Stream {
     }
 
     fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(self, cx)
+    }
+}
+
+impl futures::io::AsyncRead for Stream {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut [u8]) -> std::task::Poll<std::io::Result<usize>> {
+        if !self.read_buf.is_empty() {
+            let amt = std::cmp::min(self.read_buf.len(), buf.len());
+            buf.copy_from_slice(&self.read_buf[..amt]);
+            self.read_buf.drain(..amt);
+            return std::task::Poll::Ready(Ok(amt));
+        }
+
+        let data = match self.data_rx.poll_recv(cx) {
+            std::task::Poll::Pending => return std::task::Poll::Pending,
+            std::task::Poll::Ready(None) => return std::task::Poll::Ready(Ok(0)),
+            std::task::Poll::Ready(Some(data)) => data,
+        };
+        let amt = std::cmp::min(data.len(), buf.len());
+        let (a, b) = data.split_at(amt);
+        buf.copy_from_slice(a);
+        self.read_buf.extend_from_slice(b);
+        std::task::Poll::Ready(Ok(amt))
+    }
+}
+
+impl futures::io::AsyncWrite for Stream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8]
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        tokio::io::AsyncWrite::poll_write(self, cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(self, cx)
+    }
+
+    fn poll_close(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>
     ) -> std::task::Poll<std::io::Result<()>> {

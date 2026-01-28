@@ -1,4 +1,3 @@
-use crate::cell;
 use rand::prelude::*;
 use aes::cipher::{KeyIvInit, StreamCipher};
 
@@ -9,11 +8,11 @@ struct RelayCommand {
 }
 
 #[derive(Debug)]
-pub struct InnerCircuit {
+pub(crate) struct InnerCircuit {
     identity: crate::RsaIdentity,
     circuit_id: u32,
-    pub(crate) command_tx: tokio::sync::mpsc::Sender<cell::Command>,
-    control_rx: tokio::sync::mpsc::Receiver<cell::Command>,
+    pub(crate) command_tx: tokio::sync::mpsc::Sender<crate::cell::Command>,
+    control_rx: tokio::sync::mpsc::Receiver<crate::cell::Command>,
     stream_tx: tokio::sync::mpsc::Sender<StreamManagement>,
     streams: std::collections::HashSet<u16>,
     nodes: std::sync::Arc<tokio::sync::Mutex<Vec<CircuitNode>>>,
@@ -184,11 +183,11 @@ impl InnerCircuit {
         nodes: std::sync::Arc<tokio::sync::Mutex<Vec<CircuitNode>>>,
         mut stream_rx: tokio::sync::mpsc::Receiver<StreamManagement>,
 
-        mut command_in_rx: tokio::sync::mpsc::Receiver<cell::Command>,
-        control_in_tx: tokio::sync::mpsc::Sender<cell::Command>,
+        mut command_in_rx: tokio::sync::mpsc::Receiver<crate::cell::Command>,
+        control_in_tx: tokio::sync::mpsc::Sender<crate::cell::Command>,
 
         mut relay_out_rx: tokio::sync::mpsc::Receiver<RelayCommand>,
-        command_out_tx: tokio::sync::mpsc::Sender<cell::Command>,
+        command_out_tx: tokio::sync::mpsc::Sender<crate::cell::Command>,
 
         relay_control_out_tx: tokio::sync::mpsc::Sender<super::stream::StreamCommand>,
     ) {
@@ -198,7 +197,7 @@ impl InnerCircuit {
             macro_rules! process_command {
                 ($ic:expr) => {
                     match $ic {
-                        Some(cell::Command::Relay(relay)) => {
+                        Some(crate::cell::Command::Relay(relay)) => {
                             let mut nodes_guard = nodes.lock().await;
                             let (origin, cell) = match Self::decrypt_backward(&mut nodes_guard, &relay.data) {
                                 Ok(payload) => payload,
@@ -210,7 +209,7 @@ impl InnerCircuit {
                             if let Some(cell) = cell {
                                 if cell.stream_id == 0 {
                                     match cell.command {
-                                        cell::RelayCommand::SendMe(_) => {
+                                        crate::cell::RelayCommand::SendMe(_) => {
                                             // TODO: verify digest
                                             nodes_guard[origin].package_window += crate::CIRCUIT_WINDOW_INCREMENT;
                                         },
@@ -225,7 +224,7 @@ impl InnerCircuit {
                                         }
                                     }
                                 } else {
-                                    if matches!(cell.command, cell::RelayCommand::Data(_)) {
+                                    if matches!(cell.command, crate::cell::RelayCommand::Data(_)) {
                                         nodes_guard[origin].deliver_window -= 1;
 
                                         if nodes_guard[origin].deliver_window <= (
@@ -234,7 +233,7 @@ impl InnerCircuit {
 
                                             let digest = nodes_guard[origin].backward_hasher.output();
 
-                                            let command = cell::RelayCommand::SendMe(cell::RelaySendMe {
+                                            let command = crate::cell::RelayCommand::SendMe(crate::cell::RelaySendMe {
                                                 version: 1,
                                                 data: Some(digest),
                                             });
@@ -246,7 +245,7 @@ impl InnerCircuit {
                                                 Ok(payload) => payload,
                                                 Err(_) => return,
                                             };
-                                            match command_out_tx.send(cell::Command::Relay(cell::Relay {
+                                            match command_out_tx.send(crate::cell::Command::Relay(crate::cell::Relay {
                                                 data: payload
                                             })).await {
                                                 Ok(_) => {},
@@ -273,7 +272,7 @@ impl InnerCircuit {
                         },
                         Some(command) => {
                             match command {
-                                cell::Command::Destroy(d) => {
+                                crate::cell::Command::Destroy(d) => {
                                     info!("{}: circuit {} destroyed ({:?})", identity, circuit_id, d.reason);
                                     return;
                                 }
@@ -321,7 +320,7 @@ impl InnerCircuit {
                                 "Write relay cell (dest {}, early {}) {} {:?}",
                                 relay.command.node, relay.early, relay.stream_id, relay.command.command
                             );
-                            let is_data = matches!(relay.command.command, cell::RelayCommand::Data(_));
+                            let is_data = matches!(relay.command.command, crate::cell::RelayCommand::Data(_));
                             let node_id = relay.command.node;
                             let payload = match Self::process_stream_command(relay.stream_id, relay.command, &mut nodes.lock().await) {
                                 Ok(payload) => payload,
@@ -332,11 +331,11 @@ impl InnerCircuit {
                             };
 
                             match command_out_tx.send(if relay.early {
-                                cell::Command::RelayEarly(cell::RelayEarly {
+                                crate::cell::Command::RelayEarly(crate::cell::RelayEarly {
                                     data: payload
                                 })
                             } else {
-                                cell::Command::Relay(cell::Relay {
+                                crate::cell::Command::Relay(crate::cell::Relay {
                                     data: payload
                                 })
                             }).await {
@@ -358,8 +357,8 @@ impl InnerCircuit {
             loop {
                 // This stops processing ALL relay cells if ANY node has a package window of 0.
                 // This is not ideal. We should only stop processing relay cells for specific node
-                // that has a package window of 0. Additionally we should process relay cells other
-                // than data cells even if the package window is 0. However for now this is probably
+                // that has a package window of 0. Additionally, we should process relay cells other
+                // than data cells even if the package window is 0. However, for now this is probably
                 // adequate.
                 let min_package_window = nodes.lock().await.iter().map(|n| n.package_window)
                     .min().unwrap_or(crate::CIRCUIT_WINDOW_INITIAL);
@@ -412,13 +411,13 @@ impl InnerCircuit {
 
     fn decrypt_backward(
         nodes: &mut tokio::sync::MutexGuard<Vec<CircuitNode>>, payload: &[u8]
-    ) -> std::io::Result<(usize, Option<cell::RelayCell>)> {
+    ) -> std::io::Result<(usize, Option<crate::cell::RelayCell>)> {
         let mut cur = payload.to_vec();
         for i in 0..nodes.len() {
             let n = &mut nodes[i];
             n.backward_crypter.apply_keystream(&mut cur);
 
-            let mut relay_cell = cell::RelayCellRaw::from_bytes(&cur)?;
+            let mut relay_cell = crate::cell::RelayCellRaw::from_bytes(&cur)?;
             if relay_cell.recognized == 0 {
                 n.backward_hasher.save();
                 let old_digest = relay_cell.digest;
@@ -428,7 +427,7 @@ impl InnerCircuit {
                 let payload_digest = n.backward_hasher.output();
                 if old_digest == payload_digest[0..4] {
                     trace!("Read relay cell (origin {}) {} {}", i, relay_cell.stream_id, relay_cell.command_id);
-                    let relay_cell = cell::RelayCell::from_raw(relay_cell)?;
+                    let relay_cell = crate::cell::RelayCell::from_raw(relay_cell)?;
                     return Ok((i, relay_cell));
                 }
                 n.backward_hasher.revert();
@@ -450,7 +449,7 @@ impl InnerCircuit {
             ));
         }
         let dest_node = &mut nodes[command.node];
-        let mut cell = cell::RelayCell {
+        let mut cell = crate::cell::RelayCell {
             stream_id,
             command: command.command,
             digest: [0; 4],
@@ -532,8 +531,8 @@ impl InnerCircuit {
 impl Circuit {
     pub(crate) fn new(
         identity: crate::RsaIdentity, circuit_id: u32,
-        command_tx: tokio::sync::mpsc::Sender<cell::Command>,
-        command_rx: tokio::sync::mpsc::Receiver<cell::Command>
+        command_tx: tokio::sync::mpsc::Sender<crate::cell::Command>,
+        command_rx: tokio::sync::mpsc::Receiver<crate::cell::Command>
     ) -> Self {
         let nodes = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let (stream_tx, stream_rx) = tokio::sync::mpsc::channel(10);
@@ -612,7 +611,7 @@ impl Circuit {
         });
     }
 
-    pub(crate) async fn recv_control_command(&self) -> Result<cell::Command, std::io::Error> {
+    pub(crate) async fn recv_control_command(&self) -> Result<crate::cell::Command, std::io::Error> {
         match self.inner.lock().await.control_rx.recv().await {
             Some(command) => Ok(command),
             None => Err(std::io::Error::new(
@@ -643,7 +642,7 @@ impl Circuit {
             early: true,
             command: crate::stream::StreamCommand {
                 node: dest,
-                command: cell::RelayCommand::Extend2(cell::RelayExtend2 {
+                command: crate::cell::RelayCommand::Extend2(crate::cell::RelayExtend2 {
                     link_specifiers,
                     client_handshake_type: 2,
                     client_handshake: data,
@@ -656,7 +655,7 @@ impl Circuit {
 
         let reply_command = self.recv_relay_control_command().await?;
         let resp = match reply_command.command {
-            cell::RelayCommand::Extended2(e) => {
+            crate::cell::RelayCommand::Extended2(e) => {
                 if e.server_data.len() != 64 {
                     return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid server data"));
                 }
@@ -676,8 +675,23 @@ impl Circuit {
         Ok(())
     }
 
-    pub(crate) async fn extend_circuit(&self, descriptor: &crate::net_status::descriptor::Descriptor) -> std::io::Result<()> {
-        self.extend_circuit_raw(descriptor.to_link_specifiers(), descriptor.identity, descriptor.ntor_onion_key).await
+    pub async fn extend_circuit<S: crate::storage::Storage + Send + Sync + 'static>(
+        &self, router: &crate::net_status::consensus::Router, client: &crate::Client<S>,
+    ) -> std::io::Result<crate::net_status::descriptor::Descriptor> {
+        let descriptor = match tokio::time::timeout(
+            crate::DEFAULT_TIMEOUT, crate::net_status::descriptor::get_server_descriptor(router, client)
+        ).await {
+            Ok(Ok(d)) => d,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Timed out fetching router descriptor"))
+        };
+        match tokio::time::timeout(
+            crate::DEFAULT_TIMEOUT, self.extend_circuit_raw(descriptor.to_link_specifiers(), descriptor.identity, descriptor.ntor_onion_key)
+        ).await {
+            Ok(Ok(_)) => Ok(descriptor),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Timed out extending circuit"))
+        }
     }
 
     pub(crate) async fn establish_rendezvous(&self, cookie: [u8; 20]) -> std::io::Result<()> {
@@ -688,7 +702,7 @@ impl Circuit {
             early: false,
             command: crate::stream::StreamCommand {
                 node: dest,
-                command: cell::RelayCommand::EstablishRendezvous(cell::RelayEstablishRendezvous {
+                command: crate::cell::RelayCommand::EstablishRendezvous(crate::cell::RelayEstablishRendezvous {
                     cookie,
                 }),
             }
@@ -699,7 +713,7 @@ impl Circuit {
 
         let reply_command = self.recv_relay_control_command().await?;
         match reply_command.command {
-            cell::RelayCommand::RendezvousEstablished => {},
+            crate::cell::RelayCommand::RendezvousEstablished => {},
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset, "unexpected reply",
@@ -712,10 +726,10 @@ impl Circuit {
         Ok(())
     }
 
-    pub(crate) async fn recv_rendezvous(&self) -> std::io::Result<cell::RelayRendezvous2> {
+    pub(crate) async fn recv_rendezvous(&self) -> std::io::Result<crate::cell::RelayRendezvous2> {
         let reply_command = self.recv_relay_control_command().await?;
         let resp = match reply_command.command {
-            cell::RelayCommand::Rendezvous2(r) => r,
+            crate::cell::RelayCommand::Rendezvous2(r) => r,
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset, "unexpected reply",
@@ -726,7 +740,7 @@ impl Circuit {
         Ok(resp)
     }
 
-    pub(crate) async fn send_introduction(&self, intro: cell::RelayIntroduce1) -> std::io::Result<cell::RelayIntroduceAck> {
+    pub(crate) async fn send_introduction(&self, intro: crate::cell::RelayIntroduce1) -> std::io::Result<crate::cell::RelayIntroduceAck> {
         let dest = self.inner.lock().await.circuit_len().await - 1;
 
         match self.relay_tx.send(RelayCommand {
@@ -734,7 +748,7 @@ impl Circuit {
             early: false,
             command: crate::stream::StreamCommand {
                 node: dest,
-                command: cell::RelayCommand::Introduce1(intro),
+                command: crate::cell::RelayCommand::Introduce1(intro),
             }
         }).await {
             Ok(_) => {},
@@ -743,7 +757,7 @@ impl Circuit {
 
         let reply_command = self.recv_relay_control_command().await?;
         let resp = match reply_command.command {
-            cell::RelayCommand::IntroduceAck(a) => a,
+            crate::cell::RelayCommand::IntroduceAck(a) => a,
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset, "unexpected reply",
@@ -760,14 +774,14 @@ impl Circuit {
         !self.inner.lock().await.relay_tx.is_closed()
     }
 
-    pub async fn relay_begin(&self, to: &str, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
+    pub(crate) async fn relay_begin_inner(&self, to: &str, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
         let dest = dest.unwrap_or(self.inner.lock().await.circuit_len().await - 1);
         let mut stream = self.inner.lock().await.new_stream().await?;
         stream.circuit_end.store(dest, std::sync::atomic::Ordering::Relaxed);
 
         match stream.command_tx.get_ref().unwrap().send(crate::stream::StreamCommand {
             node: dest,
-            command: cell::RelayCommand::Begin(cell::RelayBegin {
+            command: crate::cell::RelayCommand::Begin(crate::cell::RelayBegin {
                 addr_port: to.to_string(),
                 ipv6_ok: true,
                 ipv4_not_ok: false,
@@ -789,11 +803,18 @@ impl Circuit {
         };
 
         match reply_command.command {
-            cell::RelayCommand::End(e) => {
+            crate::cell::RelayCommand::End(e) => {
                 self.inner.lock().await.purge_stream(stream.get_stream_id());
                 return Err(e.reason.to_io_error());
             },
-            cell::RelayCommand::Connected(_) => {},
+            crate::cell::RelayCommand::Connected(c) => {
+                if let Some(ip) = c.address {
+                    stream.remote_ip = Some(crate::stream::StreamIp {
+                        ip,
+                        ttl: c.ttl
+                    });
+                }
+            },
             _ => {
                 self.inner.lock().await.purge_stream(stream.get_stream_id());
                 return Err(std::io::Error::new(
@@ -807,14 +828,24 @@ impl Circuit {
         Ok(stream)
     }
 
-    pub async fn relay_begin_dir(&self, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
+    pub async fn relay_begin(&self, to: &str) -> std::io::Result<crate::stream::Stream> {
+        match tokio::time::timeout(
+            crate::DEFAULT_TIMEOUT,
+            self.relay_begin_inner(to, None),
+        ).await {
+            Ok(r) => r,
+            Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Timed out opening stream")),
+        }
+    }
+
+    pub(crate) async fn relay_begin_dir_inner(&self, dest: Option<usize>) -> std::io::Result<crate::stream::Stream> {
         let dest = dest.unwrap_or(self.inner.lock().await.circuit_len().await - 1);
         let mut stream = self.inner.lock().await.new_stream().await?;
         stream.circuit_end.store(dest, std::sync::atomic::Ordering::Relaxed);
 
         match stream.command_tx.get_ref().unwrap().send(crate::stream::StreamCommand {
             node: dest,
-            command: cell::RelayCommand::BeginDir,
+            command: crate::cell::RelayCommand::BeginDir,
         }).await {
             Ok(_) => {},
             Err(_) => {
@@ -831,11 +862,11 @@ impl Circuit {
         };
 
         match reply_command.command {
-            cell::RelayCommand::End(e) => {
+            crate::cell::RelayCommand::End(e) => {
                 self.inner.lock().await.purge_stream(stream.get_stream_id());
                 return Err(e.reason.to_io_error());
             },
-            cell::RelayCommand::Connected(_) => {},
+            crate::cell::RelayCommand::Connected(_) => {},
             _ => {
                 self.inner.lock().await.purge_stream(stream.get_stream_id());
                 return Err(std::io::Error::new(
@@ -847,5 +878,35 @@ impl Circuit {
         debug!("{}: circuit {}; created directory stream {} to node {}", self.identity, self.circuit_id, stream.get_stream_id(), dest);
 
         Ok(stream)
+    }
+
+    pub async fn relay_begin_dir(&self) -> std::io::Result<crate::stream::Stream> {
+        match tokio::time::timeout(
+            crate::DEFAULT_TIMEOUT,
+            self.relay_begin_dir_inner(None),
+        ).await {
+            Ok(r) => r,
+            Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Timed out opening directory stream")),
+        }
+    }
+
+    pub async fn send_keep_alive(&self) -> std::io::Result<()> {
+        let dest = self.inner.lock().await.circuit_len().await - 1;
+
+        match self.relay_tx.send(RelayCommand {
+            stream_id: 0,
+            early: false,
+            command: crate::stream::StreamCommand {
+                node: dest,
+                command: crate::cell::RelayCommand::Drop,
+            }
+        }).await {
+            Ok(_) => {},
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "circuit closed")),
+        }
+
+        debug!("{}: circuit {} sent drop keep-alive", self.identity, self.circuit_id);
+
+        Ok(())
     }
 }

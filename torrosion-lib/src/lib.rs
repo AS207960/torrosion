@@ -6,12 +6,12 @@ mod fallback;
 mod cell;
 mod cert;
 mod connection;
-mod circuit;
+pub mod circuit;
 mod stream;
-mod net_status;
-mod con;
+pub mod net_status;
+pub mod con;
 mod auth;
-mod http;
+pub mod http;
 pub mod hs;
 pub mod storage;
 
@@ -33,30 +33,29 @@ static DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10)
 type Aes128 = ctr::Ctr128BE<aes::Aes128>;
 type Aes256 = ctr::Ctr128BE<aes::Aes256>;
 
-type Consensus = std::sync::Arc<tokio::sync::RwLock<Option<net_status::consensus::Consensus>>>;
+
+pub struct ClientInner<S: storage::Storage> {
+    storage: S,
+    ds_circuit: tokio::sync::RwLock<Option<circuit::Circuit>>,
+    hs_relays: tokio::sync::RwLock<Option<hs::HSRelays>>
+}
 
 pub struct Client<S: storage::Storage> {
-    storage: std::sync::Arc<S>,
-    current_consensus: Consensus,
-    ds_circuit: std::sync::Arc<tokio::sync::RwLock<Option<circuit::Circuit>>>,
-    hs_relays: std::sync::Arc<tokio::sync::RwLock<Option<hs::HSRelays>>>
+    inner: std::sync::Arc<ClientInner<S>>,
+    current_consensus: tokio::sync::watch::Receiver<Option<net_status::consensus::Consensus>>,
+    new_consensus: tokio::sync::watch::Sender<Option<net_status::consensus::Consensus>>,
 }
 
 impl<S: storage::Storage> std::fmt::Debug for Client<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("Client");
         d.field("storage", &"Arc<Storage>");
-        match self.current_consensus.try_read() {
-            Ok(c) => {
-                match c.deref() {
-                    Some(_) => d.field("current_consensus", &"Some(...)"),
-                    None => d.field("current_consensus", &"None")
-                }
-            }
-            Err(_) => d.field("current_consensus", &"<locked>")
+        match self.current_consensus.borrow().as_ref() {
+            Some(_) => d.field("current_consensus", &"Some(...)"),
+            None => d.field("current_consensus", &"None")
         };
-        d.field("ds_circuit", &self.ds_circuit);
-        d.field("hs_relays", &self.hs_relays);
+        d.field("ds_circuit", &self.inner.ds_circuit);
+        d.field("hs_relays", &self.inner.hs_relays);
         d.finish_non_exhaustive()
     }
 }
@@ -64,37 +63,46 @@ impl<S: storage::Storage> std::fmt::Debug for Client<S> {
 impl<S: storage::Storage> Clone for Client<S> {
     fn clone(&self) -> Self {
         Self {
-            storage: self.storage.clone(),
+            inner: self.inner.clone(),
             current_consensus: self.current_consensus.clone(),
-            ds_circuit: self.ds_circuit.clone(),
-            hs_relays: self.hs_relays.clone()
+            new_consensus: self.new_consensus.clone()
         }
     }
 }
 
 impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
     pub fn new(storage: S) -> Self {
+        let (new_consensus, current_consensus) = tokio::sync::watch::channel(None);
         Self {
-            storage: std::sync::Arc::new(storage),
-            current_consensus: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-            ds_circuit: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-            hs_relays: std::sync::Arc::new(tokio::sync::RwLock::new(None))
+            inner: std::sync::Arc::new(ClientInner {
+                storage,
+                ds_circuit: tokio::sync::RwLock::new(None),
+                hs_relays: tokio::sync::RwLock::new(None),
+            }),
+            current_consensus,
+            new_consensus,
         }
     }
 
     pub async fn ready(&self) -> bool {
-        self.current_consensus.read().await.is_some()
+        self.current_consensus.borrow().is_some()
     }
 
-    pub(crate) async fn consensus(&self) -> std::io::Result<net_status::consensus::Consensus> {
-        match self.current_consensus.read().await.deref() {
+    pub async fn wait_ready(&mut self) {
+        while self.current_consensus.borrow_and_update().is_none() {
+            self.current_consensus.changed().await.unwrap();
+        }
+    }
+
+    pub async fn consensus(&self) -> std::io::Result<net_status::consensus::Consensus> {
+        match self.current_consensus.borrow().deref() {
             Some(c) => Ok(c.clone()),
             None => Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "Not ready"))
         }
     }
 
     pub(crate) async fn get_ds_circuit(&self) -> std::io::Result<circuit::Circuit> {
-        match self.ds_circuit.read().await.deref() {
+        match self.inner.ds_circuit.read().await.deref() {
             Some(c) => {
                 if c.is_open().await {
                     return Ok(c.clone());
@@ -103,9 +111,9 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
             None => {}
         }
 
-        let mut l = self.ds_circuit.write().await;
+        let mut l = self.inner.ds_circuit.write().await;
         let consensus = self.consensus().await?;
-        let directory_server = net_status::select_directory_server(&consensus)
+        let directory_server = net_status::select_directory_server(&consensus, false)
             .ok_or(std::io::Error::new(
                 std::io::ErrorKind::NotFound, "No suitable directory server found"
             ))?;
@@ -117,68 +125,70 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
     }
 
     pub(crate) async fn get_hs_relays(&self) -> std::io::Result<hs::HSRelays> {
-        match self.hs_relays.read().await.deref() {
+        match self.inner.hs_relays.read().await.deref() {
             Some(h) => {
                 return Ok(h.clone());
             },
             None => {}
         }
 
-        let mut l = self.hs_relays.write().await;
+        let mut l = self.inner.hs_relays.write().await;
         let dirs = hs::get_hs_dirs(&self).await?;
         *l = Some(dirs.clone());
         Ok(dirs)
     }
 
     pub async fn run(&mut self) {
-        match self.storage.load_consensus().await {
-            Ok(mut r) => match net_status::consensus::Consensus::parse(&mut r).await {
-                Ok(c) => {
-                    let authority_keys = futures::stream::iter( auth::default_authorities())
-                        .map(|auth| {
-                            let storage = self.storage.clone();
-                            async move {
-                                let mut kr = match storage.load_dir_key_certificate(auth.id).await {
-                                    Ok(kr) => kr,
-                                    Err(e) => {
-                                        error!("Error loading dir key certificate: {}", e);
-                                        return (auth.id, None);
-                                    }
-                                };
+        match self.inner.storage.load_consensus().await {
+            Ok(mut r) => {
+                match net_status::consensus::Consensus::parse(&mut r).await {
+                    Ok(c) => {
+                        let authority_keys = futures::stream::iter( auth::default_authorities())
+                            .map(|auth| {
+                                let inner = self.inner.clone();
+                                async move {
+                                    let mut kr = match inner.storage.load_dir_key_certificate(auth.id).await {
+                                        Ok(kr) => kr,
+                                        Err(e) => {
+                                            error!("Error loading dir key certificate: {}", e);
+                                            return (auth.id, None);
+                                        }
+                                    };
 
-                                let directory_key = match net_status::dir_key_certificate::DirectoryKeyCertificate::parse(&mut kr).await {
-                                    Ok(dk) => dk,
-                                    Err(e) => {
-                                        warn!("Failed to parse directory key for authority {} ({}): {}", auth.name, auth.id, e);
-                                        return (auth.id, None);
-                                    }
-                                };
+                                    let directory_key = match net_status::dir_key_certificate::DirectoryKeyCertificate::parse(&mut kr).await {
+                                        Ok(dk) => dk,
+                                        Err(e) => {
+                                            warn!("Failed to parse directory key for authority {} ({}): {}", auth.name, auth.id, e);
+                                            return (auth.id, None);
+                                        }
+                                    };
 
-                                let dk = if !directory_key.verify() {
-                                    warn!("Failed to verify stored directory key for {}", auth.name);
-                                    None
-                                } else if directory_key.fingerprint != auth.id {
-                                    warn!("Fingerprint mismatch for {}", auth.name);
-                                    None
-                                } else {
-                                    Some(directory_key)
-                                };
-                                (auth.id, dk)
+                                    let dk = if !directory_key.verify() {
+                                        warn!("Failed to verify stored directory key for {}", auth.name);
+                                        None
+                                    } else if directory_key.fingerprint != auth.id {
+                                        warn!("Fingerprint mismatch for {}", auth.name);
+                                        None
+                                    } else {
+                                        Some(directory_key)
+                                    };
+                                    (auth.id, dk)
+                                }
+                            }).buffer_unordered(10).collect::<std::collections::HashMap<RsaIdentity, _>>().await;
+
+                        if verify_consensus(&c, &authority_keys) {
+                            if c.valid_until < chrono::Utc::now() {
+                                warn!("Stored consensus is expired");
+                            } else {
+                                self.new_consensus.send(Some(c)).unwrap();
                             }
-                        }).buffer_unordered(10).collect::<std::collections::HashMap<RsaIdentity, _>>().await;
-
-                    if verify_consensus(&c, &authority_keys) {
-                        if c.valid_until < chrono::Utc::now() {
-                            warn!("Stored consensus is expired");
                         } else {
-                            *self.current_consensus.write().await = Some(c);
+                            error!("Failed to verify stored consensus");
                         }
-                    } else {
-                        error!("Failed to verify stored consensus");
                     }
-                }
-                Err(e) => {
-                    error!("Error parsing stored consensus: {}", e);
+                    Err(e) => {
+                        error!("Error parsing stored consensus: {}", e);
+                    }
                 }
             }
             Err(e) => {
@@ -186,25 +196,20 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
             }
         }
 
-        let storage = self.storage.clone();
-        let consensus = self.current_consensus.clone();
-        let hs_relays = self.hs_relays.clone();
+        let new_self = self.clone();
         tokio::task::spawn(async move {
-            Self::consensus_loop(consensus, hs_relays, storage).await;
+            new_self.consensus_loop().await;
         });
     }
 
-    async fn consensus_loop(
-        consensus: Consensus,
-        hs_relays: std::sync::Arc<tokio::sync::RwLock<Option<hs::HSRelays>>>,
-        storage: std::sync::Arc<S>
-    ) {
+    async fn consensus_loop(&self) {
         loop {
-            let consensus_is_current = consensus.read().await.as_ref().map_or(false, |consensus| {
+            let consensus_is_current = self.current_consensus.borrow().as_ref().map_or(false, |consensus| {
                 consensus.fresh_until > chrono::Utc::now()
             });
             if !consensus_is_current {
-                let (tcp_stream, identity) = match consensus.read().await.deref() {
+                let c = self.current_consensus.borrow().clone();
+                let (tcp_stream, identity) = match c {
                     None => {
                         // We have no stored consensus
                         let fallback_dirs = fallback::FallbackDirs::new();
@@ -241,7 +246,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                         };
                         tokio::time::sleep(std::time::Duration::from_secs(delay_s)).await;
 
-                        let directory_server = match net_status::select_directory_server(&c) {
+                        let directory_server = match net_status::select_directory_server(&c, false) {
                             Some(ds) => ds,
                             None => {
                                 warn!("No directory server available");
@@ -298,9 +303,9 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                 };
                 let dir_client = http::new_directory_client(dir_circ);
 
-                let authority_keys = futures::stream::iter( auth::default_authorities()).map(|auth| {
+                let authority_keys = futures::stream::iter(auth::default_authorities()).map(|auth| {
+                    let new_self = self.clone();
                     let dir_client = dir_client.clone();
-                    let storage = storage.clone();
                     async move {
                         debug!("Fetching key for authority {} ({})", auth.name, auth.id);
                         let url = format!("http://dummy/tor/keys/fp/{}.z", auth.id.to_hex()).parse::<hyper::Uri>().unwrap();
@@ -352,7 +357,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
                             None
                         } else {
                             let b = body.buf();
-                            if let Err(e) = storage.save_dir_key_certificate(auth.id, b).await {
+                            if let Err(e) = new_self.inner.storage.save_dir_key_certificate(auth.id, b).await {
                                 warn!("Failed to save directory key certificate for {}: {}", auth.name, e);
                             }
                             Some(directory_key)
@@ -405,11 +410,11 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
 
                 if verify_consensus(&new_consensus, &authority_keys) {
                     let b = body.buf();
-                    if let Err(e) = storage.save_consensus(b).await {
+                    if let Err(e) = self.inner.storage.save_consensus(b).await {
                         warn!("Failed to save consensus: {}", e);
                     }
-                    consensus.write().await.replace(new_consensus);
-                    *hs_relays.write().await = None;
+                    self.new_consensus.send(Some(new_consensus)).unwrap();
+                    *self.inner.hs_relays.write().await = None;
                 } else {
                     continue;
                 }

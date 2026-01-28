@@ -95,29 +95,16 @@ async fn make_rendezvous_point<S: crate::storage::Storage + Send + Sync + 'stati
     let mut cookie = [0; 20];
     rand::rng().fill_bytes(&mut cookie);
 
-    let rend_router = crate::net_status::select_rendezvous_server(consensus).unwrap();
-    let rend_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-        &rend_router, &client
-    ).await?;
+    let rend_router = crate::net_status::select_rendezvous_server(consensus, true).unwrap();
 
-    let first_router = crate::net_status::select_node(&consensus).unwrap();
-    let first_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-        &first_router, &client
-    ).await?;
-    let tcp_stream = crate::con::connect_to_router(&first_router).await?;
-    let mut con = crate::connection::Connection::connect(
-        tcp_stream, first_router_descriptor.identity
-    ).await?;
+    let first_router = crate::net_status::select_node(&consensus, true).unwrap();
+    let con = crate::con::Connection::create_connection(&first_router, &client).await?;
+    let rend_circ = con.new_circuit().await?;
 
-    let rend_circ = con.create_circuit(first_router_descriptor.ntor_onion_key).await?;
+    let second_router = crate::net_status::select_node(&consensus, true).unwrap();
 
-    let second_router = crate::net_status::select_node(&consensus).unwrap();
-    let second_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-        &second_router, &client
-    ).await?;
-
-    rend_circ.extend_circuit(&second_router_descriptor).await?;
-    rend_circ.extend_circuit(&rend_router_descriptor).await?;
+    rend_circ.extend_circuit(&second_router, &client).await?;
+    let rend_router_descriptor = rend_circ.extend_circuit(&rend_router, &client).await?;
 
     rend_circ.establish_rendezvous(cookie).await?;
 
@@ -144,12 +131,8 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
     use sha3::digest::{Update, ExtendableOutput, XofReader};
     use aes::cipher::KeyIvInit;
 
-    let first_router = crate::net_status::select_node(&consensus).unwrap();
-    let first_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-        &first_router, &client
-    ).await?;
-    let tcp_stream = crate::con::connect_to_router(&first_router).await?;
-    let mut con = crate::connection::Connection::connect(tcp_stream, first_router_descriptor.identity).await?;
+    let first_router = crate::net_status::select_node(&consensus, false).unwrap();
+    let con = crate::con::Connection::create_connection(&first_router, &client).await?;
 
     let introduction_bytes = introduction_inner.to_bytes();
 
@@ -165,34 +148,19 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
             }
         };
 
-        let intro_circ = match tokio::time::timeout(
-            crate::DEFAULT_TIMEOUT, con.create_circuit(first_router_descriptor.ntor_onion_key)
-        ).await {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => {
+        let intro_circ = match con.new_circuit().await {
+            Ok(c) => c,
+            Err(e) => {
                 warn!("Failed to create introduction circuit: {}", e);
-                continue;
-            }
-            Err(_) => {
-                warn!("Timed out creating introduction circuit");
                 continue;
             }
         };
 
-        let second_router = crate::net_status::select_node(&consensus).unwrap();
-        let second_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-            &second_router, &client
-        ).await?;
-        match tokio::time::timeout(
-            crate::DEFAULT_TIMEOUT, intro_circ.extend_circuit(&second_router_descriptor)
-        ).await {
-            Ok(Ok(_)) => (),
-            Ok(Err(e)) => {
+        let second_router = crate::net_status::select_node(&consensus, false).unwrap();
+        match intro_circ.extend_circuit(&second_router, &client).await {
+            Ok(_) => (),
+            Err(e) => {
                 warn!("Failed to extend introduction circuit: {}", e);
-                continue;
-            }
-            Err(_) => {
-                warn!("Timed out extending introduction circuit");
                 continue;
             }
         }
@@ -285,7 +253,7 @@ async fn send_introduction<S: crate::storage::Storage + Send + Sync + 'static>(
         })
     }
 
-    return Err(std::io::Error::new(
+    Err(std::io::Error::new(
         std::io::ErrorKind::ConnectionReset, "Failed to send introduction",
     ))
 }

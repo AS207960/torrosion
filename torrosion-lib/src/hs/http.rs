@@ -66,7 +66,7 @@ impl<S: crate::storage::Storage + Send + Sync + 'static> tower::Service<hyper::U
             };
 
             let con_to = format!("{}:{}", authority.host(), port);
-            hs_circ.relay_begin(&con_to, None).await
+            hs_circ.relay_begin_inner(&con_to, None).await
         }.boxed()
     }
 }

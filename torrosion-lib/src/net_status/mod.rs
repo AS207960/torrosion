@@ -1,85 +1,86 @@
 pub mod consensus;
-pub mod dir_key_certificate;
 pub mod descriptor;
+pub mod dir_key_certificate;
 
-use std::pin::Pin;
 use base64::prelude::*;
-use tokio::io::AsyncBufReadExt;
 use futures::StreamExt;
 use rand::prelude::SliceRandom;
+use std::pin::Pin;
+use tokio::io::AsyncBufReadExt;
 
 macro_rules! get_exactly_once {
-    ($v:expr, $t:path) => {
-        {
-            let pos = match $v.iter().position(|p| matches!(p, $t(_))) {
-                Some(p) => p,
-                None => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput, "Invalid consensus"
-                )),
-            };
-            let s = $v.swap_remove(pos);
-            if $v.iter().position(|p| matches!(p, $t(_))).is_some() {
+    ($v:expr, $t:path) => {{
+        let pos = match $v.iter().position(|p| matches!(p, $t(_))) {
+            Some(p) => p,
+            None => {
                 return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput, "Invalid consensus"
-                ));
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid consensus",
+                ))
             }
-            match s {
-                $t(s) => s,
-                _ => unreachable!(),
-            }
+        };
+        let s = $v.swap_remove(pos);
+        if $v.iter().position(|p| matches!(p, $t(_))).is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid consensus",
+            ));
         }
-    }
+        match s {
+            $t(s) => s,
+            _ => unreachable!(),
+        }
+    }};
 }
 
 macro_rules! get_at_most_once {
-    ($v:expr, $t:path) => {
-        {
-            match $v.iter().position(|p| matches!(p, $t(_))) {
-                Some(pos) => {
-                    let s = $v.swap_remove(pos);
-                    if $v.iter().position(|p| matches!(p, $t(_))).is_some() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput, "Invalid consensus"
-                        ));
-                    }
-                    match s {
-                        $t(s) => Some(s),
-                        _ => unreachable!(),
-                    }
-                },
-                None => None,
-            }
-        }
-    }
-}
-
-macro_rules! get_all {
-    ($v:expr, $t:path) => {
-        {
-            let mut o = vec![];
-            while let Some(pos) = $v.iter().position(|p| matches!(p, $t(_))) {
+    ($v:expr, $t:path) => {{
+        match $v.iter().position(|p| matches!(p, $t(_))) {
+            Some(pos) => {
                 let s = $v.swap_remove(pos);
+                if $v.iter().position(|p| matches!(p, $t(_))).is_some() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Invalid consensus",
+                    ));
+                }
                 match s {
-                    $t(s) => o.push(s),
+                    $t(s) => Some(s),
                     _ => unreachable!(),
                 }
             }
-            o
+            None => None,
         }
-    }
+    }};
 }
 
-pub(crate) use get_exactly_once;
-pub(crate) use get_at_most_once;
-pub(crate) use get_all;
+macro_rules! get_all {
+    ($v:expr, $t:path) => {{
+        let mut o = vec![];
+        while let Some(pos) = $v.iter().position(|p| matches!(p, $t(_))) {
+            let s = $v.swap_remove(pos);
+            match s {
+                $t(s) => o.push(s),
+                _ => unreachable!(),
+            }
+        }
+        o
+    }};
+}
 
-pub(crate) struct LineReader<'a, R: tokio::io::AsyncRead + Unpin + Send> (
-    tokio_stream::wrappers::SplitStream<tokio::io::BufReader<&'a mut R>>
+pub(crate) use get_all;
+pub(crate) use get_at_most_once;
+pub(crate) use get_exactly_once;
+
+pub(crate) struct LineReader<'a, R: tokio::io::AsyncRead + Unpin + Send>(
+    tokio_stream::wrappers::SplitStream<tokio::io::BufReader<&'a mut R>>,
 );
 
 impl<'a, R: tokio::io::AsyncRead + Unpin + Send> LineReader<'a, R> {
     pub(crate) fn new(reader: &'a mut R) -> Self {
-        Self(tokio_stream::wrappers::SplitStream::new(tokio::io::BufReader::new(reader).split(b'\n')))
+        Self(tokio_stream::wrappers::SplitStream::new(
+            tokio::io::BufReader::new(reader).split(b'\n'),
+        ))
     }
 
     pub(crate) fn iter(self, digest_type: &'static ring::digest::Algorithm) -> LineReaderIter<'a> {
@@ -100,10 +101,16 @@ impl<'a, R: tokio::io::AsyncRead + Unpin + Send> LineReader<'a, R> {
         }
     }
 
-    pub(crate) fn iter_many_digest(self, digest_types: &[&'static ring::digest::Algorithm]) -> LineReaderIter<'a> {
+    pub(crate) fn iter_many_digest(
+        self,
+        digest_types: &[&'static ring::digest::Algorithm],
+    ) -> LineReaderIter<'a> {
         LineReaderIter {
             iter: StreamExt::peekable(Box::new(self.0)),
-            digests: digest_types.iter().map(|d| (ring::digest::Context::new(d), true)).collect(),
+            digests: digest_types
+                .iter()
+                .map(|d| (ring::digest::Context::new(d), true))
+                .collect(),
             raw: Vec::new(),
             should_digest_raw: false,
         }
@@ -111,7 +118,11 @@ impl<'a, R: tokio::io::AsyncRead + Unpin + Send> LineReader<'a, R> {
 }
 
 pub struct LineReaderIter<'a> {
-    iter: futures::stream::Peekable<Box<dyn 'a + futures::stream::Stream<Item = Result<Vec<u8>, std::io::Error>> + Unpin + Send>>,
+    iter: futures::stream::Peekable<
+        Box<
+            dyn 'a + futures::stream::Stream<Item = Result<Vec<u8>, std::io::Error>> + Unpin + Send,
+        >,
+    >,
     digests: Vec<(ring::digest::Context, bool)>,
     raw: Vec<u8>,
     should_digest_raw: bool,
@@ -157,28 +168,38 @@ impl LineReaderIter<'_> {
         }
         let s = match String::from_utf8(v) {
             Ok(s) => s,
-            Err(e) => return Some(Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput, format!("Invalid UTF-8: {}", e)
-            ))),
-        }.trim().to_string();
+            Err(e) => {
+                return Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Invalid UTF-8: {}", e),
+                )))
+            }
+        }
+        .trim()
+        .to_string();
         Some(Ok(s))
     }
 
-    pub async fn next_if(&mut self, cond: fn(&Result<String, std::io::Error>) -> bool) -> Option<Result<String, std::io::Error>> {
-        let v = match Pin::new(&mut self.iter).next_if(|v| {
-            let s = match v {
-                Ok(v) => match String::from_utf8(v.clone()) {
-                    Ok(s) => Ok(s.trim().to_string()),
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput, format!("Invalid UTF-8: {}", e)
-                    )),
-                },
-                Err(e) => Err(std::io::Error::new(
-                    e.kind(), e.to_string()
-                ))
-            };
-            cond(&s)
-        }).await? {
+    pub async fn next_if(
+        &mut self,
+        cond: fn(&Result<String, std::io::Error>) -> bool,
+    ) -> Option<Result<String, std::io::Error>> {
+        let v = match Pin::new(&mut self.iter)
+            .next_if(|v| {
+                let s = match v {
+                    Ok(v) => match String::from_utf8(v.clone()) {
+                        Ok(s) => Ok(s.trim().to_string()),
+                        Err(e) => Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("Invalid UTF-8: {}", e),
+                        )),
+                    },
+                    Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+                };
+                cond(&s)
+            })
+            .await?
+        {
             Ok(v) => v,
             Err(e) => return Some(Err(e)),
         };
@@ -197,7 +218,9 @@ impl LineReaderIter<'_> {
     }
 }
 
-pub async fn read_pem(r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem::Pem, x509_parser::error::PEMError> {
+pub async fn read_pem(
+    r: &mut LineReaderIter<'_>,
+) -> Result<x509_parser::pem::Pem, x509_parser::error::PEMError> {
     let label = loop {
         let line = match r.next().await {
             Some(Ok(l)) => l,
@@ -208,8 +231,14 @@ pub async fn read_pem(r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem::Pe
             continue;
         }
         let mut iter = line.split_whitespace();
-        let label = iter.nth(1).ok_or(x509_parser::error::PEMError::InvalidHeader)?;
-        let label = label.split('-').next().ok_or(x509_parser::error::PEMError::InvalidHeader)?.to_string();
+        let label = iter
+            .nth(1)
+            .ok_or(x509_parser::error::PEMError::InvalidHeader)?;
+        let label = label
+            .split('-')
+            .next()
+            .ok_or(x509_parser::error::PEMError::InvalidHeader)?
+            .to_string();
         break label;
     };
     let mut s = String::new();
@@ -225,50 +254,118 @@ pub async fn read_pem(r: &mut LineReaderIter<'_>) -> Result<x509_parser::pem::Pe
         s.push_str(line.trim_end());
     }
 
-    let contents = BASE64_STANDARD.decode(&s).or(Err(x509_parser::error::PEMError::Base64DecodeError))?;
-    let pem = x509_parser::pem::Pem {
-        label,
-        contents,
-    };
+    let contents = BASE64_STANDARD
+        .decode(&s)
+        .or(Err(x509_parser::error::PEMError::Base64DecodeError))?;
+    let pem = x509_parser::pem::Pem { label, contents };
     Ok(pem)
 }
 
-pub(crate) fn select_directory_server(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
+pub fn select_directory_server(
+    consensus: &consensus::Consensus,
+    need_fast: bool,
+) -> Option<&consensus::Router> {
     let mut rng = rand::rng();
-    let mut servers = consensus.routers.iter().filter(|r| {
-        r.status.iter().any(|f| f == "V2Dir")
-    }).filter(|r| {
-        r.status.iter().any(|f| f == "Running")
-    }).filter(|r| {
-        r.status.iter().any(|f| f == "Valid")
-    }).collect::<Vec<_>>();
+    let mut servers = consensus
+        .routers
+        .iter()
+        .filter(|r| {
+            r.status.iter().any(|f| f == "V2Dir")
+                && r.status.iter().any(|f| f == "Running")
+                && r.status.iter().any(|f| f == "Valid")
+                && (!need_fast || r.status.iter().any(|f| f == "Fast"))
+        })
+        .collect::<Vec<_>>();
     servers.shuffle(&mut rng);
     servers.first().map(|r| *r)
 }
 
-pub(crate) fn select_rendezvous_server(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
+pub fn select_rendezvous_server(
+    consensus: &consensus::Consensus,
+    need_fast: bool,
+) -> Option<&consensus::Router> {
     let mut rng = rand::rng();
-    let mut servers = consensus.routers.iter().filter(|r| {
-        r.status.iter().any(|f| f == "V2Dir")
-    }).filter(|r| {
-        r.status.iter().any(|f| f == "Running")
-    }).filter(|r| {
-        match &r.protocols {
+    let mut servers = consensus
+        .routers
+        .iter()
+        .filter(|r| {
+            r.status.iter().any(|f| f == "V2Dir")
+                && r.status.iter().any(|f| f == "Running")
+                && r.status.iter().any(|f| f == "Valid")
+                && (!need_fast || r.status.iter().any(|f| f == "Fast"))
+        })
+        .filter(|r| match &r.protocols {
             Some(e) => e.supports("HSRend", 2),
             None => false,
-        }
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     servers.shuffle(&mut rng);
     servers.first().map(|r| *r)
 }
 
-pub(crate) fn select_node(consensus: &consensus::Consensus) -> Option<&consensus::Router> {
+pub fn select_node(
+    consensus: &consensus::Consensus,
+    need_fast: bool,
+) -> Option<&consensus::Router> {
     let mut rng = rand::rng();
-    let mut servers = consensus.routers.iter().filter(|r| {
-        r.status.iter().any(|f| f == "Running")
-    }).filter(|r| {
-        r.status.iter().any(|f| f == "Valid")
-    }).collect::<Vec<_>>();
+    let mut servers = consensus
+        .routers
+        .iter()
+        .filter(|r| {
+            r.status.iter().any(|f| f == "Running")
+                && r.status.iter().any(|f| f == "Valid")
+                && (!need_fast || r.status.iter().any(|f| f == "Fast"))
+        })
+        .collect::<Vec<_>>();
+    servers.shuffle(&mut rng);
+    servers.first().map(|r| *r)
+}
+
+pub fn select_guard_node(
+    consensus: &consensus::Consensus,
+    need_fast: bool,
+) -> Option<&consensus::Router> {
+    let mut rng = rand::rng();
+    let mut servers = consensus
+        .routers
+        .iter()
+        .filter(|r| {
+            r.status.iter().any(|f| f == "Guard")
+                && r.status.iter().any(|f| f == "Running")
+                && r.status.iter().any(|f| f == "Valid")
+                && (!need_fast || r.status.iter().any(|f| f == "Fast"))
+        })
+        .collect::<Vec<_>>();
+    servers.shuffle(&mut rng);
+    servers.first().map(|r| *r)
+}
+
+pub fn select_exit_node<'a, 'b>(
+    consensus: &'a consensus::Consensus,
+    ports: Option<&'b [u16]>,
+    need_fast: bool,
+) -> Option<&'a consensus::Router> {
+    let mut rng = rand::rng();
+    let servers = consensus.routers.iter().filter(|r| {
+        r.status.iter().any(|f| f == "Exit")
+            && r.status.iter().any(|f| f == "Running")
+            && r.status.iter().any(|f| f == "Valid")
+            && (!need_fast || r.status.iter().any(|f| f == "Fast"))
+    });
+    let mut servers = if let Some(ports) = ports {
+        servers
+            .filter(|r| {
+                for port in ports {
+                    if !r.evaluate_port_policy(*port) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect::<Vec<_>>()
+    } else {
+        servers.collect::<Vec<_>>()
+    };
     servers.shuffle(&mut rng);
     servers.first().map(|r| *r)
 }

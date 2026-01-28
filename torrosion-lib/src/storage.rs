@@ -36,18 +36,19 @@ impl<R: AsyncRead + Unpin + Send> AsyncRead for SavingReader<R> {
     }
 }
 
-#[async_trait::async_trait]
-pub trait Storage {
-    async fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> std::io::Result<()>;
-    async fn load_consensus<'a>(&'a self) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>>;
+#[dynosaur::dynosaur(pub DynStorage = dyn(box) Storage)]
+pub trait Storage: Send + Sync {
+    fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> impl std::future::Future<Output = std::io::Result<()>> + Send;
+    fn load_consensus<'a>(&'a self) -> impl std::future::Future<Output = std::io::Result<Box<dyn AsyncRead + Unpin + Send>>> + Send;
 
-    async fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> std::io::Result<()>;
-    async fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>>;
+     fn save_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity, cert: &'a [u8]) -> impl std::future::Future<Output = std::io::Result<()>> + Send;
+    fn load_dir_key_certificate<'a>(&'a self, identity: crate::RsaIdentity) -> impl std::future::Future<Output = std::io::Result<Box<dyn AsyncRead + Unpin + Send>>> + Send;
 
-    async fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> std::io::Result<()>;
-    async fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> std::io::Result<Box<dyn AsyncRead + Unpin + Send>>;
+    fn save_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8], descriptor: &'a [u8]) -> impl std::future::Future<Output = std::io::Result<()>> + Send;
+    fn load_server_descriptor<'a>(&'a self, identity: &'a crate::RsaIdentity, digest: &[u8]) -> impl std::future::Future<Output = std::io::Result<Box<dyn AsyncRead + Unpin + Send>>> + Send;
 }
 
+#[derive(Debug)]
 pub struct FileStorage {
     root: std::path::PathBuf,
 }
@@ -74,7 +75,6 @@ impl FileStorage {
     }
 }
 
-#[async_trait::async_trait]
 impl Storage for FileStorage {
     async fn save_consensus<'a>(&'a self, consensus: &'a [u8]) -> Result<(), std::io::Error> {
         let mut f = tokio::fs::File::create(self.root.join("consensus")).await?;

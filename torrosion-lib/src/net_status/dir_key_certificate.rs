@@ -77,8 +77,12 @@ impl DirectoryKeyCertificate {
             Ok(k) => k.1,
             Err(_) => return None
         };
+        let m = match key.modulus[0] {
+            0 => &key.modulus[1..],
+            _ => &key.modulus[..],
+        };
         match rsa::RsaPublicKey::new(
-            rsa::BoxedUint::from_be_slice_vartime(key.modulus),
+            rsa::BoxedUint::from_be_slice(m, key.key_size() as u32).ok()?,
             rsa::BoxedUint::from_be_slice_vartime(key.exponent)
         ) {
             Ok(k) => Some(k),
@@ -91,8 +95,12 @@ impl DirectoryKeyCertificate {
             Ok(k) => k.1,
             Err(_) => return None
         };
+        let m = match key.modulus[0] {
+            0 => &key.modulus[1..],
+            _ => &key.modulus[..],
+        };
         match rsa::RsaPublicKey::new(
-            rsa::BoxedUint::from_be_slice_vartime(key.modulus),
+            rsa::BoxedUint::from_be_slice(m, key.key_size() as u32).ok()?,
             rsa::BoxedUint::from_be_slice_vartime(key.exponent)
         ) {
             Ok(k) => Some(k),

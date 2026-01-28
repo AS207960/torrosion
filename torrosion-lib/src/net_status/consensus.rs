@@ -587,17 +587,17 @@ impl Authority {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub(crate) struct Router {
+pub struct Router {
     pub name: String,
     pub identity: crate::RsaIdentity,
     pub digest: Vec<u8>,
     pub addresses: Vec<std::net::SocketAddr>,
     pub dir_port: Option<u16>,
     pub status: Vec<String>,
-    pub protocols: Option<Entries>,
-    pub version: Option<RouterVersion>,
-    pub port_policy: Option<RouterPortPolicy>,
-    pub bandwidth: Option<RouterBandwidth>,
+    pub(crate) protocols: Option<Entries>,
+    pub(crate) version: Option<RouterVersion>,
+    pub(crate) port_policy: Option<RouterPortPolicy>,
+    pub(crate) bandwidth: Option<RouterBandwidth>,
 }
 
 impl Router {
@@ -697,6 +697,26 @@ impl Router {
             port_policy,
             bandwidth,
         }))
+    }
+
+    pub fn evaluate_port_policy(&self, port: u16) -> bool {
+        let Some(ref policy) = self.port_policy else {
+            return true;
+        };
+        match policy.policy {
+            RouterPortPolicyType::Reject => {
+                if policy.ports.iter().any(|r| r.contains(&port)) {
+                    return false;
+                }
+                true
+            }
+            RouterPortPolicyType::Accept => {
+                if policy.ports.iter().any(|r| r.contains(&port)) {
+                    return true;
+                }
+                false
+            }
+        }
     }
 }
 
@@ -832,7 +852,7 @@ impl RouterBandwidth {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RouterPortPolicy {
     pub policy: RouterPortPolicyType,
-    pub ports: Vec<std::ops::Range<u16>>,
+    pub ports: Vec<std::ops::RangeInclusive<u16>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -866,13 +886,13 @@ impl RouterPortPolicy {
                 let end = end.parse::<u16>().map_err(|_| std::io::Error::new(
                     std::io::ErrorKind::InvalidInput, "Invalid entry"
                 ))?;
-                Ok(std::ops::Range { start, end })
+                Ok(start..=end)
             }
             None => {
                 let value = v.parse::<u16>().map_err(|_| std::io::Error::new(
                     std::io::ErrorKind::InvalidInput, "Invalid entry"
                 ))?;
-                Ok(std::ops::Range { start: value, end: value + 1 })
+                Ok(value..=value)
             }
         }).collect::<Result<Vec<_>, std::io::Error>>()?;
 

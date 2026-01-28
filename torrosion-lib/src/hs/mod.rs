@@ -168,117 +168,46 @@ impl HSAddress {
         candidates.shuffle(&mut rand::rng());
 
         let mut r = 0;
-        let (mut con, first_router_descriptor) = loop {
+        let con = loop {
             if r >= crate::DEFAULT_RETRIES {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset, "Failed to make rendezvous point",
                 ))
             }
 
-            let first_router = crate::net_status::select_node(&consensus).unwrap();
-            let first_router_descriptor = match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT,
-                crate::net_status::descriptor::get_server_descriptor(
-                    &first_router, &client
-                )
-            ).await {
-                Ok(Ok(d)) => d,
-                Ok(Err(e)) => {
-                    warn!("Failed to get server descriptor: {}", e);
-                    r += 1;
-                    continue;
-                }
-                Err(_) => {
-                    warn!("Timed out getting server descriptor");
-                    r += 1;
-                    continue;
-                }
-            };
-
-            let tcp_stream = match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT,
-                crate::con::connect_to_router(&first_router)
-            ).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => {
+            let first_router = crate::net_status::select_node(&consensus, false).unwrap();
+            match crate::con::Connection::create_connection(first_router, client).await {
+                Ok(c) => break c,
+                Err(e) => {
                     warn!("Failed to connect to router: {}", e);
-                    r += 1;
-                    continue;
-                }
-                Err(_) => {
-                    warn!("Timed out connecting to router");
-                    r += 1;
-                    continue;
-                }
-            };
-
-             match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT,
-                crate::connection::Connection::connect(
-                    tcp_stream, first_router_descriptor.identity
-                )
-            ).await {
-                Ok(Ok(c)) => break (c, first_router_descriptor),
-                Ok(Err(e)) => {
-                    warn!("Failed to connect to router: {}", e);
-                    r += 1;
-                    continue;
-                }
-                Err(_) => {
-                    warn!("Timed out connecting to router");
                     r += 1;
                     continue;
                 }
             }
         };
 
-
         for candidate in &candidates {
-            let dir_circ = match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT, con.create_circuit(first_router_descriptor.ntor_onion_key)
-            ).await {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => {
+            let dir_circ = match con.new_circuit().await {
+                Ok(c) => c,
+                Err(e) => {
                     warn!("Failed to create HS directory circuit: {}", e);
-                    continue;
-                }
-                Err(_) => {
-                    warn!("Timed out creating HS directory circuit");
                     continue;
                 }
             };
 
-            let second_router = crate::net_status::select_node(&consensus).unwrap();
-            let second_router_descriptor = crate::net_status::descriptor::get_server_descriptor(
-                &second_router, &client
-            ).await?;
-            match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT, dir_circ.extend_circuit(&second_router_descriptor)
-            ).await {
-                Ok(Ok(_)) => (),
-                Ok(Err(e)) => {
+            let second_router = crate::net_status::select_node(&consensus, false).unwrap();
+            match dir_circ.extend_circuit(&second_router, &client).await {
+                Ok(_) => (),
+                Err(e) => {
                     warn!("Failed to extend HS directory circuit: {}", e);
-                    continue;
-                }
-                Err(_) => {
-                    warn!("Timed out extending HS directory circuit");
                     continue;
                 }
             }
 
-            let candidate_descriptor = crate::net_status::descriptor::get_server_descriptor(
-                &candidate.router, &client
-            ).await?;
-            match tokio::time::timeout(
-                crate::DEFAULT_TIMEOUT, dir_circ.extend_circuit(&candidate_descriptor)
-            ).await {
-                Ok(Ok(_)) => (),
-                Ok(Err(e)) => {
+            match dir_circ.extend_circuit(&candidate.router, &client).await {
+                Ok(_) => (),
+                Err(e) => {
                     warn!("Failed to extend HS directory circuit: {}", e);
-                    continue;
-                }
-                Err(_) => {
-                    warn!("Timed out extending HS directory circuit");
                     continue;
                 }
             }

@@ -490,7 +490,7 @@ struct ConnectionRouter {
     protocol_version: u16,
     cell_tx: tokio::sync::mpsc::Sender<cell::Cell>,
     circuit_tx: tokio::sync::mpsc::Sender<CircuitManagement>,
-    circuits: std::collections::HashSet<u32>
+    circuits: tokio::sync::Mutex<std::collections::HashSet<u32>>,
 }
 
 enum CircuitManagement {
@@ -513,7 +513,7 @@ impl ConnectionRouter {
             cell_tx,
             protocol_version,
             circuit_tx,
-            circuits: std::collections::HashSet::new(),
+            circuits: tokio::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -539,7 +539,7 @@ impl ConnectionRouter {
                                     }
                                 }
                             },
-                            None => return
+                            None => break
                         }
                     }
                     cc = circuit_rx.recv() => {
@@ -552,42 +552,43 @@ impl ConnectionRouter {
                                     circuits.remove(&circuit_id);
                                 },
                             },
-                            None => return
+                            None => break
                         }
                     }
                 }
             }
+            trace!("connection closing")
         });
     }
 
-    fn select_circuit_id(&mut self) -> u32 {
-        let mut rng = rand::rng();
+    async fn select_circuit_id(&self) -> u32 {
         loop {
             let circuit_id = if self.protocol_version >= 4 {
-                let r = rng.random_range(1..u32::MAX >> 1);
+                let r = rand::rng().random_range(1..u32::MAX >> 1);
                 if self.initiated {
                     r | 1 << 31
                 } else {
                     r
                 }
             } else {
-                rng.random_range(1..u16::MAX as u32)
+                rand::rng().random_range(1..u16::MAX as u32)
             };
-            if !self.circuits.contains(&circuit_id) {
-                self.circuits.insert(circuit_id);
+            let mut circuits = self.circuits.lock().await;
+            if !circuits.contains(&circuit_id) {
+                circuits.insert(circuit_id);
                 return circuit_id;
             }
         }
     }
 
-    async fn new_circuit(&mut self) -> std::io::Result<crate::circuit::Circuit> {
+    async fn new_circuit(&self) -> std::io::Result<crate::circuit::Circuit> {
         let (command_in_tx, command_in_rx) = tokio::sync::mpsc::channel::<cell::Command>(10);
         let (command_out_tx, mut command_out_rx) = tokio::sync::mpsc::channel::<cell::Command>(10);
 
-        let circuit_id = self.select_circuit_id();
+        let circuit_id = self.select_circuit_id().await;
         match self.circuit_tx.send(CircuitManagement::Create(circuit_id, command_in_tx.clone())).await {
             Ok(_) => {},
-            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::Other, "failed to create circuit")),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection closed, failed to create circuit")),
         }
 
         let circ_control_tx = self.circuit_tx.clone();
@@ -618,8 +619,9 @@ impl ConnectionRouter {
         ))
     }
 
-    fn purge_circuit(&mut self, circuit_id: u32) {
-        self.circuits.remove(&circuit_id);
+    async fn purge_circuit(&self, circuit_id: u32) {
+        let mut circuits = self.circuits.lock().await;
+        circuits.remove(&circuit_id);
         let _ = self.circuit_tx.send(CircuitManagement::Destroy(circuit_id));
     }
 }
@@ -648,8 +650,6 @@ impl Connection {
             Ok(s) => s,
             Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("TLS error: {}", e))),
         };
-        // let tls_connector = tokio_rustls::TlsConnector::from(crate::TLS_CLIENT_CONFIG.clone());
-        // let tls_stream = tls_connector.connect(rustls::client::ServerName::try_from("example.com").unwrap(), tcp_stream).await?;
         debug!("TLS connection to {} established", identity);
         if !is_v3_handshake(&tls_stream) {
             return Err(std::io::Error::new(
@@ -742,7 +742,7 @@ impl Connection {
         Ok((df, db, kf, kb))
     }
 
-    pub async fn create_circuit(&mut self, ntor_onion_key: [u8; 32]) -> std::io::Result<crate::circuit::Circuit> {
+    pub async fn create_circuit(&self, ntor_onion_key: [u8; 32]) -> std::io::Result<crate::circuit::Circuit> {
         let circuit = self.router.new_circuit().await?;
 
         let (data, state) = Self::ntor_client_1(self.identity, ntor_onion_key);
@@ -760,14 +760,14 @@ impl Connection {
         let reply_command = match circuit.recv_control_command().await {
             Ok(command) => command,
             Err(e) => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(e);
             }
         };
 
         let resp = match reply_command {
             cell::Command::Destroy(d) => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
                     format!("circuit refused {:?}", d.reason),
@@ -775,7 +775,7 @@ impl Connection {
             },
             cell::Command::Created2(c) => c.server_data,
             _ => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset, "unexpected reply",
                 ));
@@ -785,7 +785,7 @@ impl Connection {
         let (df, db, kf, kb) = match Self::ntor_client_2(&resp, state) {
             Ok(x) => x,
             Err(e) => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(e);
             }
         };
@@ -817,14 +817,14 @@ impl Connection {
         let reply_command = match circuit.recv_control_command().await {
             Ok(command) => command,
             Err(e) => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(e);
             }
         };
 
         let created = match reply_command {
             cell::Command::Destroy(d) => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
                     format!("circuit refused {:?}", d.reason),
@@ -832,7 +832,7 @@ impl Connection {
             },
             cell::Command::CreatedFast(c) => c,
             _ => {
-                self.router.purge_circuit(circuit.get_circuit_id());
+                self.router.purge_circuit(circuit.get_circuit_id()).await;
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionReset, "unexpected reply",
                 ));
@@ -857,7 +857,7 @@ impl Connection {
         let kb = <[u8; 16]>::try_from(&k[76..92]).unwrap();
 
         if kh != created.derivate_key_data {
-            self.router.purge_circuit(circuit.get_circuit_id());
+            self.router.purge_circuit(circuit.get_circuit_id()).await;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other, "KDF mismatch",
             ));

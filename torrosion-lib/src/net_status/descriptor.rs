@@ -23,7 +23,7 @@ async fn parse_server_descriptor<S: crate::storage::Storage + Send + Sync + 'sta
     }
     {
         let d = body.buf();
-        client.storage.save_server_descriptor(&descriptor.identity, &descriptor.rsa_hash.as_ref(), d)
+        client.inner.storage.save_server_descriptor(&descriptor.identity, &descriptor.rsa_hash.as_ref(), d)
     }.await?;
 
     Ok(descriptor)
@@ -32,7 +32,7 @@ async fn parse_server_descriptor<S: crate::storage::Storage + Send + Sync + 'sta
 pub(crate) async fn get_server_descriptor<S: crate::storage::Storage + Send + Sync + 'static>(
     router: &super::consensus::Router, client: &crate::Client<S>,
 ) -> std::io::Result<Descriptor> {
-    if let Ok(mut r) = client.storage.load_server_descriptor(&router.identity, &router.digest).await {
+    if let Ok(mut r) = client.inner.storage.load_server_descriptor(&router.identity, &router.digest).await {
         let descriptor = Descriptor::parse(&mut r).await?;
 
         if descriptor.rsa_hash.as_ref() != router.digest {
@@ -87,7 +87,7 @@ pub(crate) async fn get_server_descriptor_by_identity<S: crate::storage::Storage
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub(crate) struct Descriptor {
+pub struct Descriptor {
     pub(crate) nickname: String,
     pub(crate) identity: crate::RsaIdentity,
     pub(crate) or_addresses: Vec<std::net::SocketAddr>,
@@ -172,8 +172,15 @@ impl Descriptor {
             Ok(k) => k.1,
             Err(_) => return false,
         };
+        let m = match identity_key.modulus[0] {
+            0 => &identity_key.modulus[1..],
+            _ => &identity_key.modulus[..],
+        };
         let identity_key = match rsa::RsaPublicKey::new(
-            rsa::BoxedUint::from_be_slice_vartime(identity_key.modulus),
+            match rsa::BoxedUint::from_be_slice(m, identity_key.key_size() as u32) {
+                Ok(k) => k,
+                Err(_) => return false,
+            },
             rsa::BoxedUint::from_be_slice_vartime(identity_key.exponent)
         ) {
             Ok(k) => k,
@@ -192,8 +199,15 @@ impl Descriptor {
             Ok(k) => k.1,
             Err(_) => return false,
         };
+        let m = match onion_key.modulus[0] {
+            0 => &onion_key.modulus[1..],
+            _ => &onion_key.modulus[..],
+        };
         let onion_key = match rsa::RsaPublicKey::new(
-            rsa::BoxedUint::from_be_slice_vartime(onion_key.modulus),
+            match rsa::BoxedUint::from_be_slice(m, onion_key.key_size() as u32) {
+                Ok(k) => k,
+                Err(_) => return false,
+            },
             rsa::BoxedUint::from_be_slice_vartime(onion_key.exponent)
         ) {
             Ok(k) => k,

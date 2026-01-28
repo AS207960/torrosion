@@ -18,7 +18,122 @@ impl tower::Service<hyper::Uri> for HyperDirectoryConnector {
     fn call(&mut self, _req: hyper::Uri) -> Self::Future {
         let circ = self.circuit.clone();
         async move {
-            circ.relay_begin_dir(None).await
+            circ.relay_begin_dir_inner(None).await
+        }.boxed()
+    }
+}
+
+#[derive(Clone)]
+pub struct HyperConnector {
+    circuit: crate::circuit::Circuit,
+}
+
+pub trait HttpStream: hyper_util::client::legacy::connect::Connection + hyper::rt::Read + hyper::rt::Write + Send {}
+impl HttpStream for crate::stream::Stream {}
+
+struct TlsStream(async_native_tls::TlsStream<crate::stream::Stream>);
+
+impl hyper::rt::Read for TlsStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        mut buf: hyper::rt::ReadBufCursor
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let mut b = tokio::io::ReadBuf::uninit(unsafe { buf.as_mut() });
+        match tokio::io::AsyncRead::poll_read(std::pin::Pin::new(&mut self.0), cx, &mut b) {
+            std::task::Poll::Ready(Ok(())) => {
+                let l = b.filled().len();
+                drop(b);
+                unsafe { buf.advance(l) };
+                std::task::Poll::Ready(Ok(()))
+            },
+            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl hyper::rt::Write for TlsStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8]
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        tokio::io::AsyncWrite::poll_write(std::pin::Pin::new(&mut self.0), cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(std::pin::Pin::new(&mut self.0), cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(std::pin::Pin::new(&mut self.0), cx)
+    }
+}
+
+impl hyper_util::client::legacy::connect::Connection for TlsStream {
+    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        hyper_util::client::legacy::connect::Connected::new()
+            .proxy(false)
+    }
+}
+impl HttpStream for TlsStream {}
+
+impl hyper_util::client::legacy::connect::Connection for std::pin::Pin<Box<dyn HttpStream>> {
+    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        use std::ops::Deref;
+        self.deref().connected()
+    }
+}
+
+impl tower::Service<hyper::Uri> for HyperConnector {
+    type Response = std::pin::Pin<Box<dyn HttpStream>>;
+    type Error = std::io::Error;
+    type Future = futures::future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: hyper::Uri) -> Self::Future {
+        let circuit = self.circuit.clone();
+        async move {
+            let scheme = match req.scheme() {
+                Some(s) => s,
+                None => return Err(std::io::Error::new(std::io::ErrorKind::Other, "no scheme")),
+            };
+            let (default_port, is_tls) = match scheme.as_str() {
+                "http" => (80, false),
+                "https" => (443, true),
+                _ => return Err(std::io::Error::new(std::io::ErrorKind::Other, "invalid scheme")),
+            };
+            let authority = match req.authority() {
+                Some(a) => a,
+                None => return Err(std::io::Error::new(std::io::ErrorKind::Other, "no authority")),
+            };
+            let port = authority.port_u16().unwrap_or(default_port);
+
+            let con_to = format!("{}:{}", authority.host(), port);
+            debug!("Connecting to {}", con_to);
+            let stream = circuit.relay_begin_inner(&con_to, None).await?;
+            let res: std::pin::Pin<Box<dyn HttpStream>> = if is_tls {
+                let tls_stream = match async_native_tls::TlsConnector::new()
+                    .use_sni(true)
+                    .connect(authority.host(), stream).await {
+                    Ok(s) => s,
+                    Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("TLS error: {}", e))),
+                };
+                Box::pin(TlsStream(tls_stream))
+            } else {
+                Box::pin(stream)
+            };
+            Ok(res)
         }.boxed()
     }
 }
@@ -100,6 +215,15 @@ pub(crate) fn new_directory_client(circ: crate::circuit::Circuit) -> hyper_util:
     hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .set_host(false)
         .build::<_, http_body_util::Full<bytes::Bytes>>(HyperDirectoryConnector {
+            circuit: circ
+        })
+}
+
+pub fn new_client(circ: crate::circuit::Circuit) -> hyper_util::client::legacy::Client<
+    HyperConnector, http_body_util::Full<bytes::Bytes>> {
+    hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .set_host(true)
+        .build::<_, http_body_util::Full<bytes::Bytes>>(HyperConnector {
             circuit: circ
         })
 }
