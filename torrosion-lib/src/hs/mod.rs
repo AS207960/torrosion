@@ -503,7 +503,7 @@ fn shared_random_value(consensus: &crate::net_status::consensus::Consensus) -> [
 }
 
 mod test {
-    #[test]
+    #[cfg(test)]
     use chrono::TimeZone;
 
     #[test]
