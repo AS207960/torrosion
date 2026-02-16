@@ -111,7 +111,6 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
             None => {}
         }
 
-        let mut l = self.inner.ds_circuit.write().await;
         let consensus = self.consensus().await?;
         let directory_server = net_status::select_directory_server(&consensus, false)
             .ok_or(std::io::Error::new(
@@ -120,7 +119,7 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
         let tcp_stream = con::connect_to_router(directory_server).await?;
         let mut con = connection::Connection::connect(tcp_stream, directory_server.identity).await?;
         let circ = con.create_circuit_fast().await?;
-        *l = Some(circ.clone());
+        *self.inner.ds_circuit.write().await = Some(circ.clone());
         Ok(circ)
     }
 
