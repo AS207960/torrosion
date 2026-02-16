@@ -124,6 +124,10 @@ impl<S: storage::Storage + Send + Sync + 'static> Client<S> {
         Ok(circ)
     }
 
+    pub(crate) async fn reset_ds_circuit(&self) {
+        *self.inner.ds_circuit.write().await = None;
+    }
+
     pub(crate) async fn get_hs_relays(&self) -> std::io::Result<hs::HSRelays> {
         match self.inner.hs_relays.read().await.deref() {
             Some(h) => {

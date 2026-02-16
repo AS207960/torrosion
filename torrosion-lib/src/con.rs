@@ -51,7 +51,10 @@ impl Connection {
         ).await {
             Ok(Ok(d)) => d,
             Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Timed out getting server descriptor"))
+            Err(_) => {
+                client.reset_ds_circuit().await;
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Timed out getting server descriptor"))
+            }
         };
 
         let tcp_stream = match tokio::time::timeout(
