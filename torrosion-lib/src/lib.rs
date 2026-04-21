@@ -14,6 +14,7 @@ mod auth;
 pub mod http;
 pub mod hs;
 pub mod storage;
+mod obfs4;
 
 use std::fmt::Formatter;
 use std::ops::Deref;

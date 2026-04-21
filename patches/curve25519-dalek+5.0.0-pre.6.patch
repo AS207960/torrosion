@@ -1,0 +1,174 @@
+diff --git a/src/backend/serial/u64/constants.rs b/src/backend/serial/u64/constants.rs
+index cd27b8f..397808c 100644
+--- a/src/backend/serial/u64/constants.rs
++++ b/src/backend/serial/u64/constants.rs
+@@ -112,12 +112,12 @@ pub(crate) const APLUS2_OVER_FOUR: FieldElement51 =
+ /// `MONTGOMERY_A` is equal to 486662, which is a constant of the curve equation
+ /// for Curve25519 in its Montgomery form. (This is used internally within the
+ /// Elligator map.)
+-pub(crate) const MONTGOMERY_A: FieldElement51 = FieldElement51::from_limbs([486662, 0, 0, 0, 0]);
++pub const MONTGOMERY_A: FieldElement51 = FieldElement51::from_limbs([486662, 0, 0, 0, 0]);
+ 
+ #[cfg(feature = "digest")]
+ /// `MONTGOMERY_A_NEG` is equal to -486662. (This is used internally within the
+ /// Elligator map.)
+-pub(crate) const MONTGOMERY_A_NEG: FieldElement51 = FieldElement51::from_limbs([
++pub const MONTGOMERY_A_NEG: FieldElement51 = FieldElement51::from_limbs([
+     2251799813198567,
+     2251799813685247,
+     2251799813685247,
+diff --git a/src/backend/serial/u64/field.rs b/src/backend/serial/u64/field.rs
+index 05340bc..ffc6eae 100644
+--- a/src/backend/serial/u64/field.rs
++++ b/src/backend/serial/u64/field.rs
+@@ -572,4 +572,22 @@ impl FieldElement51 {
+ 
+         square
+     }
++
++    pub fn gt(&self, other: &Self) -> Choice {
++        let mut _ul = 0_u64;
++        let mut _vl = 0_u64;
++        let mut _rl = 0_u64;
++
++        let mut cy = 0_u64;
++        for i in 0..5 {
++            _ul = self.0[i];
++            _vl = other.0[i];
++
++            let (_sl, _cy1) = _ul.overflowing_sub(_vl);
++            let (_rl, _cy2) = _sl.overflowing_sub(cy);
++            cy = _cy1 as u64 | _cy2 as u64;
++        }
++
++        Choice::from((cy != 0_u64) as u8)
++    }
+ }
+diff --git a/src/constants.rs b/src/constants.rs
+index 0a11624..c5e98cf 100644
+--- a/src/constants.rs
++++ b/src/constants.rs
+@@ -69,7 +69,7 @@ pub const RISTRETTO_BASEPOINT_POINT: RistrettoPoint = RistrettoPoint(ED25519_BAS
+ /// $$
+ /// \ell = 2^\{252\} + 27742317777372353535851937790883648493.
+ /// $$
+-pub(crate) const BASEPOINT_ORDER: Scalar = Scalar {
++pub const BASEPOINT_ORDER: Scalar = Scalar {
+     bytes: [
+         0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+         0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+diff --git a/src/edwards.rs b/src/edwards.rs
+index 1efe285..04f6dea 100644
+--- a/src/edwards.rs
++++ b/src/edwards.rs
+@@ -388,10 +388,10 @@ impl<'de> Deserialize<'de> for CompressedEdwardsY {
+ #[derive(Copy, Clone)]
+ #[allow(missing_docs)]
+ pub struct EdwardsPoint {
+-    pub(crate) X: FieldElement,
+-    pub(crate) Y: FieldElement,
+-    pub(crate) Z: FieldElement,
+-    pub(crate) T: FieldElement,
++    pub X: FieldElement,
++    pub Y: FieldElement,
++    pub Z: FieldElement,
++    pub T: FieldElement,
+ }
+ 
+ // ------------------------------------------------------------------------
+diff --git a/src/field.rs b/src/field.rs
+index 8924166..8df88e6 100644
+--- a/src/field.rs
++++ b/src/field.rs
+@@ -53,7 +53,7 @@ cfg_if! {
+         ///
+         /// Using formally-verified field arithmetic from fiat-crypto.
+         #[cfg(curve25519_dalek_bits = "32")]
+-        pub(crate) type FieldElement = backend::serial::fiat_u32::field::FieldElement2625;
++        pub type FieldElement = backend::serial::fiat_u32::field::FieldElement2625;
+ 
+         /// A `FieldElement` represents an element of the field
+         /// \\( \mathbb Z / (2\^{255} - 19)\\).
+@@ -63,21 +63,21 @@ cfg_if! {
+         ///
+         /// Using formally-verified field arithmetic from fiat-crypto.
+         #[cfg(curve25519_dalek_bits = "64")]
+-        pub(crate) type FieldElement = backend::serial::fiat_u64::field::FieldElement51;
++        pub type FieldElement = backend::serial::fiat_u64::field::FieldElement51;
+     } else if #[cfg(curve25519_dalek_bits = "64")] {
+         /// A `FieldElement` represents an element of the field
+         /// \\( \mathbb Z / (2\^{255} - 19)\\).
+         ///
+         /// The `FieldElement` type is an alias for one of the platform-specific
+         /// implementations.
+-        pub(crate) type FieldElement = backend::serial::u64::field::FieldElement51;
++        pub type FieldElement = backend::serial::u64::field::FieldElement51;
+     } else {
+         /// A `FieldElement` represents an element of the field
+         /// \\( \mathbb Z / (2\^{255} - 19)\\).
+         ///
+         /// The `FieldElement` type is an alias for one of the platform-specific
+         /// implementations.
+-        pub(crate) type FieldElement = backend::serial::u32::field::FieldElement2625;
++        pub type FieldElement = backend::serial::u32::field::FieldElement2625;
+     }
+ }
+ 
+@@ -153,7 +153,7 @@ impl FieldElement {
+     /// # Return
+     ///
+     /// If negative, return `Choice(1)`.  Otherwise, return `Choice(0)`.
+-    pub(crate) fn is_negative(&self) -> Choice {
++    pub fn is_negative(&self) -> Choice {
+         let bytes = self.to_bytes();
+         (bytes[0] & 1).into()
+     }
+@@ -163,7 +163,7 @@ impl FieldElement {
+     /// # Return
+     ///
+     /// If zero, return `Choice(1)`.  Otherwise, return `Choice(0)`.
+-    pub(crate) fn is_zero(&self) -> Choice {
++    pub fn is_zero(&self) -> Choice {
+         let zero = [0u8; 32];
+         let bytes = self.to_bytes();
+ 
+@@ -280,7 +280,7 @@ impl FieldElement {
+     /// This function returns zero on input zero.
+     #[rustfmt::skip] // keep alignment of explanatory comments
+     #[allow(clippy::let_and_return)]
+-    pub(crate) fn invert(&self) -> FieldElement {
++    pub fn invert(&self) -> FieldElement {
+         // The bits of p-2 = 2^255 -19 -2 are 11010111111...11.
+         //
+         //                                 nonzero bits of exponent
+@@ -294,7 +294,7 @@ impl FieldElement {
+     /// Raise this field element to the power (p-5)/8 = 2^252 -3.
+     #[rustfmt::skip] // keep alignment of explanatory comments
+     #[allow(clippy::let_and_return)]
+-    pub(crate) fn pow_p58(&self) -> FieldElement {
++    pub fn pow_p58(&self) -> FieldElement {
+         // The bits of (p-5)/8 are 101111.....11.
+         //
+         //                                 nonzero bits of exponent
+@@ -317,7 +317,7 @@ impl FieldElement {
+     /// - `(Choice(0), zero)        ` if `v` is zero and `u` is nonzero;
+     /// - `(Choice(0), +sqrt(i*u/v))` if `u/v` is nonsquare (so `i*u/v` is square).
+     ///
+-    pub(crate) fn sqrt_ratio_i(u: &FieldElement, v: &FieldElement) -> (Choice, FieldElement) {
++    pub fn sqrt_ratio_i(u: &FieldElement, v: &FieldElement) -> (Choice, FieldElement) {
+         // Using the same trick as in ed25519 decoding, we merge the
+         // inversion, the square root, and the square test as follows.
+         //
+diff --git a/src/lib.rs b/src/lib.rs
+index 8a085df..d2aeebc 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -80,7 +80,7 @@ pub mod traits;
+ //------------------------------------------------------------------------
+ 
+ // Finite field arithmetic mod p = 2^255 - 19
+-pub(crate) mod field;
++pub mod field;
+ 
+ // Arithmetic backends (using u32, u64, etc) live here
+ #[cfg(docsrs)]

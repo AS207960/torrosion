@@ -1,4 +1,5 @@
 use rand::prelude::*;
+use std::ops::Deref;
 use crate::{cell, cert};
 
 fn is_v3_handshake<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
@@ -694,45 +695,23 @@ impl Connection {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid server data"));
         }
 
-        let server_pk = TryInto::<[u8; 32]>::try_into(&resp[0..32]).unwrap();
+        let server_pk = x25519_dalek::PublicKey::from(TryInto::<[u8; 32]>::try_into(&resp[0..32]).unwrap());
+        let server_identity_pk = x25519_dalek::PublicKey::from(state.ntor_onion_key);
         let auth_s = TryInto::<[u8; 32]>::try_into(&resp[32..64]).unwrap();
 
-        let xy = state.my_sk.diffie_hellman(&x25519_dalek::PublicKey::from(server_pk));
-        let xb = state.my_sk.diffie_hellman(&x25519_dalek::PublicKey::from(state.ntor_onion_key));
-        let my_pk = x25519_dalek::PublicKey::from(&state.my_sk);
-
-        let mut secret_input = vec![];
-        secret_input.extend(xy.as_bytes());
-        secret_input.extend(xb.as_bytes());
-        secret_input.extend(&state.identity.to_vec());
-        secret_input.extend(&state.ntor_onion_key);
-        secret_input.extend(&my_pk.to_bytes());
-        secret_input.extend(&server_pk);
-        secret_input.extend(b"ntor-curve25519-sha256-1");
-
-        let t_mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"ntor-curve25519-sha256-1:mac");
-        let t_verify = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"ntor-curve25519-sha256-1:verify");
-
-        let verify = ring::hmac::sign(&t_verify, &secret_input);
-        let mut auth_input = vec![];
-        auth_input.extend(verify.as_ref());
-        auth_input.extend(&state.identity.to_vec());
-        auth_input.extend(&state.ntor_onion_key);
-        auth_input.extend(&server_pk);
-        auth_input.extend(&my_pk.to_bytes());
-        auth_input.extend(b"ntor-curve25519-sha256-1");
-        auth_input.extend(b"Server");
-        let auth = ring::hmac::sign(&t_mac, &auth_input);
+        let (auth, k) = ntor_auth(
+            &state.my_sk,
+            *state.identity.deref(),
+            &server_identity_pk,
+            &server_pk,
+            256
+        );
 
         if !constant_time_eq::constant_time_eq(auth.as_ref(), &auth_s) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other, "KDF mismatch",
             ));
         }
-
-        let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(b"ntor-curve25519-sha256-1:key_extract"), &secret_input);
-        let mut k = [0u8; 256];
-        hk.expand(b"ntor-curve25519-sha256-1:key_expand", &mut k).unwrap();
 
         let df = k[0..20].try_into().unwrap();
         let db = k[20..40].try_into().unwrap();
@@ -867,4 +846,48 @@ impl Connection {
         debug!("{}: circuit {} created", self.identity, circuit.get_circuit_id());
         Ok(circuit)
     }
+}
+
+fn ntor_auth(
+    own_ephemeral_key: &x25519_dalek::StaticSecret,
+    server_id: [u8; 20],
+    server_identity_key: &x25519_dalek::PublicKey,
+    server_ephemeral_key: &x25519_dalek::PublicKey,
+    key_length: usize
+) -> ([u8; 32], Vec<u8>) {
+    const PROTO_ID: &'static str = "ntor-curve25519-sha256-1";
+
+    let xy = own_ephemeral_key.diffie_hellman(&server_ephemeral_key);
+    let xb = own_ephemeral_key.diffie_hellman(&server_identity_key);
+    let own_pk = x25519_dalek::PublicKey::from(own_ephemeral_key);
+
+    let mut secret_input = Vec::with_capacity(32 + 32 + 20 + 32 + 32 + 32 + PROTO_ID.len());
+    secret_input.extend(xy.as_bytes());
+    secret_input.extend(xb.as_bytes());
+    secret_input.extend(&server_id);
+    secret_input.extend(server_identity_key.as_bytes());
+    secret_input.extend(own_pk.as_bytes());
+    secret_input.extend(server_ephemeral_key.as_bytes());
+    secret_input.extend(PROTO_ID.as_bytes());
+
+    let t_mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, format!("{}:mac", PROTO_ID).as_bytes());
+    let t_verify = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, format!("{}:verify", PROTO_ID).as_bytes());
+
+    let verify = ring::hmac::sign(&t_verify, &secret_input);
+    let mut auth_input = Vec::with_capacity(32 + 20 + 32 + 32 + 32 + PROTO_ID.len() + 6);
+    auth_input.extend(verify.as_ref());
+    auth_input.extend(&server_id);
+    auth_input.extend(server_identity_key.as_bytes());
+    auth_input.extend(server_ephemeral_key.as_bytes());
+    auth_input.extend(own_pk.as_bytes());
+    auth_input.extend(PROTO_ID.as_bytes());
+    auth_input.extend(b"Server");
+    let auth = ring::hmac::sign(&t_mac, &auth_input);
+    let auth: [u8; 32] = auth.as_ref().try_into().unwrap();
+
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(format!("{}:key_extract", PROTO_ID).as_bytes()), &secret_input);
+    let mut k = vec![0u8; key_length];
+    hk.expand(format!("{}:key_expand", PROTO_ID).as_bytes(), &mut k).unwrap();
+
+    (auth, k)
 }

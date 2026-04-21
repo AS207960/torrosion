@@ -4,3 +4,6 @@ members = [
     "torrosion-test"
 ]
 resolver = "2"
+
+[patch.crates-io]
+curve25519-dalek = { path = './target/patch/curve25519-dalek-5.0.0-pre.6' }
